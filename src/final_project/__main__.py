@@ -4,14 +4,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
+from sklearn.svm import SVC
+from sklearn.metrics import log_loss, accuracy_score
 
 from . import __version__
-from .plotting import plot_correlations
+from .plotting import plot_correlations, plot_norm_stats
+from .preprocess import run_preprocess
 from .utils import (
-    artifact_paths,
-    check_artifacts,
     load_config_json,
-    load_indices,
+    get_device,
 )
 
 logging.basicConfig(
@@ -46,19 +48,11 @@ def main():
         help="Run evaluation on the test set instead of training.",
     )
 
-    parser.add_argument(
-        "--debug-frac",
-        type=float,
-        default=1.0,
-        help="Fraction of data to use",
-    )
-
     args = parser.parse_args()
 
     config_path = Path(args.config)
-    debug_frac  = args.debug_frac
 
-    # load configuration
+    # load configuration and data
     config = load_config_json(config_path)
 
     file_path = Path(config["data"]["file_path"])
@@ -68,48 +62,8 @@ def main():
         logger.error("Data file not found: %s", file_path)
         raise
 
-    preprocess_dir = Path(config["output"]["preprocess_dir"])
-
-    # batch_size  = config["training"].get("batch_size", 1024)
-    # shuffle_var = config["data"].get("shuffle", False)
-
-    # preprocessing
-    paths = artifact_paths(preprocess_dir)
-    if not check_artifacts(list(paths.values())):
-        logger.info("Preprocessing not found: running preprocess")
-        from .preprocess import run_preprocess
-        run_preprocess(config)
-
-    if not check_artifacts(list(paths.values())):
-        raise FileNotFoundError("Preprocessing failed: artifacts still missing.")
-
-    train_indices, val_indices, test_indices = load_indices(preprocess_dir)
-    # norm_stats = load_norm_stats(preprocess_dir)
-
-    if debug_frac < 1.0:
-        rng = np.random.default_rng(seed=42)
-
-        train_indices = rng.choice(
-            train_indices,
-            size=int(len(train_indices) * debug_frac),
-            replace=False,
-        )
-        val_indices = rng.choice(
-            val_indices,
-            size=int(len(val_indices) * debug_frac),
-            replace=False,
-        )
-        test_indices = rng.choice(
-            test_indices,
-            size=int(len(test_indices) * debug_frac),
-            replace=False,
-        )
-
-        logger.info("Debug mode: %s", f"{debug_frac:.1%}")
-
-    train_indices = np.sort(train_indices)
-    val_indices   = np.sort(val_indices)
-    test_indices  = np.sort(test_indices)
+    # preprocessing    
+    (X, y), norm_stats, (train_indices, val_indices, test_indices) = run_preprocess(df, config)
 
     logger.info(
         "Train=%s, Val=%s, Test=%s",
@@ -118,19 +72,61 @@ def main():
         f"{len(test_indices):,}",
     )
 
+    # data statistics plots
+    if config["output"].get("save_plots", False):
+        plot_dir = Path(config["output"].get("plots_dir", "outputs/plots"))
+
+        plot_correlations(
+            df         = df,
+            output_dir = plot_dir,
+        )
+
+        plot_norm_stats(
+            norm_stats=norm_stats,
+            feature_names=X.columns.tolist(),
+            output_dir=plot_dir,
+            max_features=len(X.columns.tolist()),
+        )
+
+
+    X_train = X.iloc[train_indices].fillna(0).values
+    X_val   = X.iloc[val_indices].fillna(0).values
+    X_test  = X.iloc[test_indices].fillna(0).values
+    y_train = y.iloc[train_indices].to_numpy().argmax(axis=1)
+    y_val   = y.iloc[val_indices].to_numpy().argmax(axis=1)
+    y_test  = y.iloc[test_indices].to_numpy().argmax(axis=1)
+
+    model = SVC(kernel="linear", probability=True, random_state=config["data"].get("split_seed", 42))
+    model.fit(X_train, y_train)
+    y_pred_prob = model.predict_proba(X_train)
+    y_pred = model.predict(X_train)
+    train_loss = log_loss(y_train, y_pred_prob)
+    train_acc = accuracy_score(y_train, y_pred)
+    y_val_pred_prob = model.predict_proba(X_val)
+    y_val_pred = model.predict(X_val)
+    val_loss = log_loss(y_val, y_val_pred_prob)
+    val_acc = accuracy_score(y_val, y_val_pred)
+
+    print(f"Train Loss = {train_loss} | Val Loss = {val_loss}")
+    print(f"Train Acc = {train_acc} | Val Acc = {val_acc}")
+
+
+
+
+
+
+
+
+
+
     # # datasets and dataloaders
     # common_kwargs = dict(
-    #     h5_file_path    = file_path,
-    #     max_tracks      = config["data"].get("max_tracks", 40),
-    #     jet_vars        = jet_vars,
-    #     track_vars      = track_vars,
-    #     jet_flavour     = label_vars,
-    #     jet_flavour_map = label_map,
-    #     stats           = norm_stats,
+    #     file_path  = file_path,
+    #     stats      = norm_stats,
     # )
 
     # loader_kwargs = dict(
-    #     batch_size  = batch_size,
+    #     batch_size  = config["training"].get("batch_size", 1024),
     #     num_workers = config["training"].get("num_workers", 0),
     #     pin_memory  = config["training"].get("device", "auto") in ("gpu", "auto")
     #                   and torch.cuda.is_available(),
@@ -141,17 +137,60 @@ def main():
     # val_dataset   = GN2Dataset(jet_indices=val_indices,   **common_kwargs)
     # test_dataset  = GN2Dataset(jet_indices=test_indices,  **common_kwargs)
 
-    # train_loader = gn2_dataloader(train_dataset, **loader_kwargs, shuffle=shuffle_var)
+    # train_loader = gn2_dataloader(train_dataset, **loader_kwargs, shuffle=config["data"].get("shuffle", False))
     # val_loader   = gn2_dataloader(val_dataset,   **loader_kwargs, shuffle=False)
     # test_loader  = gn2_dataloader(test_dataset,  **loader_kwargs, shuffle=False)
 
-    if config["output"].get("save_plots", False):
-        plot_dir = Path(config["output"].get("plots_dir", "outputs/plots"))
 
-        plot_correlations(
-            df         = df,
-            output_dir = plot_dir,
-        )
+    # device = get_device(config["training"].get("device", "auto"))
+    # checkpoint_path = Path(config["output"].get("checkpoints_dir", "outputs/checkpoints"))
+    # if not args.evaluate:
+
+    #     # model
+    #     model_config = config.get("model", {})
+    #     model = GN2(
+    #         n_vars           = X.shape[1],
+    #         n_classes        = y.shape[1],
+    #         init_hidden_dim  = model_config.get("initialiser_hidden_dim"),
+    #         dropout          = model_config.get("transformer_dropout"),
+    #         activation       = model_config.get("activation"),
+    #     ).to(device)
+
+    #     # training
+    #     training_config = config.get("training", {})
+    #     train(
+    #         model        = model,
+    #         train_loader = train_loader,
+    #         val_loader   = val_loader,
+    #         output_dir   = checkpoint_path,
+    #         device       = device,
+    #         optimizer    = training_config.get("optimizer"),
+    #         max_epochs   = training_config.get("max_epochs"),
+    #         warmup_frac  = training_config.get("warmup_frac"),
+    #         weight_decay = training_config.get("weight_decay"),
+    #         lr_initial   = training_config.get("lr_initial"),
+    #         lr_peak      = training_config.get("lr_peak"),
+    #         lr_final     = training_config.get("lr_final"),
+    #         config       = config,
+    #     )
+
+    #     checkpoint_path = sorted(Path(checkpoint_path / "runs").glob("*/best_model.pt"))[-1]
+
+    # else:
+    #     checkpoint_path = checkpoint_path / "best_model/best_model.pt"
+
+    # # evaluation
+    # evaluate(
+    #     test_loader     = test_loader,
+    #     checkpoint_path = checkpoint_path,
+    #     output_dir      = Path(config["output"].get("evaluate_dir", "outputs/eval")),
+    #     device          = device,
+    #     flavour_map     = config["data"]["flavour_map"],
+    #     fc              = config["discriminant"]["fc_btag"],
+    #     ftau_b          = config["discriminant"]["ftau_btag"],
+    #     fb              = config["discriminant"]["fb_ctag"],
+    #     ftau_c          = config["discriminant"]["ftau_ctag"],
+    # )
 
 
 if __name__ == "__main__":

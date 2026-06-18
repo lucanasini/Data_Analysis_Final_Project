@@ -15,27 +15,7 @@ matplotlib.use("Agg")
 logger = logging.getLogger("plotting")
 
 
-# def _corr_matrix(data_dict, vars_list):
-#     """
-#     Compute correlation matrix for the specified variables.
-#     (Non-finite values are replaced with the column mean before correlation)
-
-#     Args:
-#         data_dict (dict): dict of variable name to ``np.ndarray``.
-#         vars_list (list): list of variable names to include in the matrix.
-
-#     Returns:
-#         np.ndarray: shape ``(len(vars_list), len(vars_list))``, correlation matrix.
-#     """
-#     mat = np.column_stack([data_dict[v].astype(np.float32) for v in vars_list])
-#     # replace inf/nan with column mean
-#     col_means = np.nanmean(mat, axis=0)
-#     inds = np.where(~np.isfinite(mat))
-#     mat[inds] = col_means[inds[1]]
-#     return np.corrcoef(mat, rowvar=False)
-
-
-def _draw_heatmap(ax, corr, labels, title):
+def _draw_heatmap(ax, corr, labels, title, annotate=True):
     """
     Draw a heatmap of the correlation matrix with annotations.
 
@@ -54,19 +34,20 @@ def _draw_heatmap(ax, corr, labels, title):
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
     ax.set_yticklabels(labels, fontsize=8)
     ax.set_title(title, fontsize=11)
-    # annotate cells
-    for i in range(len(labels)):
-        for j in range(len(labels)):
-            val = corr[i, j]
-            color = "white" if abs(val) > 0.6 else "black"
-            ax.text(j, i, f"{val:.2f}", ha="center", va="center",
-                    fontsize=6, color=color)
+    if annotate:
+        for i in range(len(labels)):
+            for j in range(len(labels)):
+                val = corr[i, j]
+                color = "white" if abs(val) > 0.6 else "black"
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                        fontsize=6, color=color)
     return im
 
 
 def plot_correlations(
     df: pd.DataFrame,
     output_dir: str | Path,
+    max_vars: int = 7139,
 ) -> None:
     """
     Plot Pearson correlation matrices for jet and track variables.
@@ -77,14 +58,107 @@ def plot_correlations(
     """
     logger.info("Plotting correlations ...")
     output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    corr_mat = df.corr(method="pearson")
-    n = len(df.label)
-    fig, ax = plt.subplots(figsize=(max(8, n * 0.55), max(7, n * 0.55)))
-    im = _draw_heatmap(ax, corr_mat, df.label, "Track variables - Correlation")
+    numeric_df = df.select_dtypes(include="number")
+    if numeric_df.empty:
+        logger.warning("No numeric columns found. Skipping correlation plot.")
+        return
+
+    if numeric_df.shape[1] > max_vars:
+        logger.warning(
+            "%d numeric columns found. Plotting the first %d only.",
+            numeric_df.shape[1], max_vars,
+        )
+        numeric_df = numeric_df.iloc[:, :max_vars]
+
+    corr_mat = numeric_df.corr(method="pearson")
+    labels   = numeric_df.columns.tolist()
+    n        = len(labels)
+
+    fig, ax = plt.subplots(figsize=(min(20, max(8, n * 0.55)), min(20, max(7, n * 0.55))))
+    im = _draw_heatmap(ax, corr_mat.values, labels, "Variables - Correlation", annotate=(n <= 40))
+    if n > 40:
+        ax.set_xticks([])
+        ax.set_yticks([])
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
     out = output_dir / "correlation_matrix.pdf"
+    fig.savefig(out)
+    plt.close(fig)
+
+    logger.info("Saved: %s", out)
+
+
+def plot_norm_stats(
+    norm_stats: dict[str, np.ndarray],
+    feature_names: list[str],
+    output_dir: str | Path,
+    max_features: int = 100,
+) -> None:
+    """
+    Plot per-feature mean and standard deviation used for normalization.
+
+    NaN entries in ``norm_stats`` (e.g. columns excluded from scaling) are
+    skipped automatically.
+
+    Args:
+        norm_stats (dict): dict with keys ``"mean"``, ``"sigma"`` (np.ndarray,
+            aligned with ``feature_names``).
+        feature_names (list[str]): column names, same order/length as the
+            arrays in ``norm_stats``.
+        output_dir (str | Path): directory where the PDF is saved.
+        max_features (int): if more than this many valid features are found,
+            only the first ``max_features`` are plotted (avoids unreadable /
+            oversized figures).
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Plotting normalization statistics ...")
+
+    mean  = np.asarray(norm_stats["mean"])
+    sigma = np.asarray(norm_stats["sigma"])
+
+    mask = np.isfinite(mean) & np.isfinite(sigma)
+    if not mask.any():
+        logger.warning("No valid (non-NaN) normalization stats to plot.")
+        return
+
+    names = np.array(feature_names)[mask]
+    mean  = mean[mask]
+    sigma = sigma[mask]
+
+    if len(names) > max_features:
+        logger.warning(
+            "%d normalized features found; plotting only the first %d.",
+            len(names), max_features,
+        )
+        names, mean, sigma = names[:max_features], mean[:max_features], sigma[:max_features]
+
+    n = len(names)
+    x = np.arange(n)
+
+    fig, axes = plt.subplots(2, 1, figsize=(min(24, max(8, n * 0.3)), 8), sharex=True)
+
+    ax = axes[0]
+    ax.bar(x, mean, color="steelblue")
+    ax.set_ylabel("Mean", fontsize=12)
+    ax.set_title("Per-feature normalization statistics (training set)", fontsize=13)
+    if n > 40:
+        ax.set_xticks([])
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1]
+    ax.bar(x, sigma, color="darkorange")
+    ax.set_ylabel("Std. dev.", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=90, fontsize=6)
+    if n > 40:
+        ax.set_xticks([])
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    out = output_dir / "norm_stats.pdf"
     fig.savefig(out)
     plt.close(fig)
 

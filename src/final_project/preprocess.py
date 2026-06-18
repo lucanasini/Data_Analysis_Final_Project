@@ -29,43 +29,51 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+from .utils import (
+    artifact_paths,
+    check_artifacts,
+    load_indices,
+    load_norm_stats,
+)
+
 logger = logging.getLogger("preprocess")
 
 
 def compute_normalization_stats(
-    file_path: str | Path,
+    df: pd.DataFrame,
     train_indices: np.ndarray,
 ) -> dict[str, np.ndarray]:
     """
-    Compute per-feature mean and std on the **training set only**.
+    Compute per-feature mean std on the **training set only**.
 
-    Statistics are computed exclusively on the training set to prevent data leakage.
+    Statistics are computed only on numerical columns and exclusively on the training
+    set to prevent data leakage.
 
     Args:
-        file_path (str | Path): Path to the dataset CSV file.
+        df (pd.DataFrame): Full dataset dataframe.
         train_indices (np.ndarray): sorted array of training jet indices.
 
     Returns:
         dict with keys ``"mean"``, ``"sigma"`` (each a ``np.ndarray``).
-    
-    Raises:
-        FileNotFoundError: If the data file is not found.
     """
+    df_train = df.loc[train_indices]
 
-    try:
-        df = pd.read_csv(file_path)
-    except FileNotFoundError:
-        logger.error("Data file not found: %s", file_path)
-        raise
+    all_cols = df.columns.tolist()
+    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
 
-    scaler   = StandardScaler()
-    scaler.fit(df)
+    scaler = StandardScaler()
+    scaler.fit(df_train[num_cols])
 
-    stats = {
-        "mean":  scaler.mean_,
-        "sigma": scaler.scale_,
-    }
-    logger.info("Normalization stats computed on %s entries.", f"{len(train_indices):,}")
+    mean  = np.full(len(all_cols), np.nan)
+    sigma = np.full(len(all_cols), np.nan)
+
+    numeric_positions = [all_cols.index(c) for c in num_cols]
+    mean[numeric_positions]  = scaler.mean_
+    sigma[numeric_positions] = scaler.scale_
+
+    stats = {"mean": mean, "sigma": sigma}
+    logger.info("Normalization stats computed on %s entries (%d numeric cols).",
+                f"{len(train_indices):,}", len(num_cols))
     return stats
 
 
@@ -115,7 +123,7 @@ def save_norm_stats(output_dir: str | Path, norm_stats: dict[str, np.ndarray]) -
     logger.info("Normalization stats saved to %s", out_path)
 
 
-def run_preprocess(config: dict) -> None:
+def run_preprocess(df: pd.DataFrame, config: dict) -> None:
     """
     Run the full preprocessing pipeline.
 
@@ -135,58 +143,76 @@ def run_preprocess(config: dict) -> None:
             - `preprocess_dir` (str)
 
     Args:
+        df (pd.DataFrame): Full dataset dataframe.
         config (dict): Full configuration dict.
 
     Raises:
         ValueError: If the train/val/test fractions do not sum to 1.
     """
-    # 1. load configuration
-    data_config = config["data"]
+    df.drop(df.columns[0:3], axis=1, inplace=True)
+    X = df.drop("cancer", axis=1)
+    y = df["cancer"]
+
+    cat_cols = X.select_dtypes(exclude=["number"]).columns.tolist()
+    X = pd.get_dummies(X, columns=cat_cols)
+    y = pd.get_dummies(y)
+
     output_dir = Path(config["output"]["preprocess_dir"])
 
-    file_path  = Path(data_config["file_path"])
-    df = pd.read_csv(file_path)
+    paths = artifact_paths(output_dir)
+    if check_artifacts(list(paths.values())):
+        norm_stats = load_norm_stats(output_dir)
+        train_indices, val_indices, test_indices = load_indices(output_dir)
+    
+    else:
+        logger.info("Preprocessing not found. Running preprocess")
 
-    train_frac = data_config["train_fraction"]
-    val_frac   = data_config["val_fraction"]
-    test_frac  = data_config["test_fraction"]
+        # 1. load configuration
+        data_config = config["data"]
 
-    total = train_frac + val_frac + test_frac
-    if abs(total - 1.) > 1e-6:
-        logger.warning(
-            "Fractions sum to %.6f, normalizing to 1.0", total
+        train_frac = data_config["train_fraction"]
+        val_frac   = data_config["val_fraction"]
+        test_frac  = data_config["test_fraction"]
+
+        total = train_frac + val_frac + test_frac
+        if abs(total - 1.) > 1e-6:
+            logger.warning(
+                "Fractions sum to %.6f, normalizing to 1.0", total
+            )
+            train_frac /= total
+            val_frac   /= total
+            test_frac  /= total
+
+        shuffle = data_config.get("shuffle", False)
+        seed    = data_config.get("split_seed", 42)
+
+        # 2. train / val / test split
+        indices = df.index.to_numpy()
+        train_val_indices, test_indices = train_test_split(
+            indices,
+            train_size   = train_frac + val_frac,
+            random_state = seed,
+            shuffle      = shuffle,
         )
-        train_frac /= total
-        val_frac   /= total
-        test_frac  /= total
+        train_indices, val_indices = train_test_split(
+            train_val_indices,
+            train_size   = train_frac / (train_frac + val_frac),
+            random_state = seed,
+            shuffle      = shuffle,
+        )
+        save_indices(output_dir, train_indices, val_indices, test_indices)
 
-    shuffle = data_config.get("shuffle", False)
-    seed    = data_config.get("split_seed", 42)
-
-    # 2. train / val / test split
-    train_val_indices, test_indices = train_test_split(
-        df,
-        train_size   = train_frac + val_frac,
-        random_state = seed,
-        shuffle      = shuffle,
-    )
-    train_indices, val_indices = train_test_split(
-        train_val_indices,
-        train_size   = train_frac / (train_frac + val_frac),
-        random_state = seed,
-        shuffle      = shuffle,
-    )
-    save_indices(output_dir, train_indices, val_indices, test_indices)
-
-    # 3. normalization statistics (training set only)
-    logger.info("Computing normalization statistics on training set ...")
-    norm_stats = compute_normalization_stats(
-        file_path     = file_path,
-        train_indices = train_indices,
-    )
-    save_norm_stats(output_dir, norm_stats)
+        # 3. normalization statistics (training set only)
+        logger.info("Computing normalization statistics on training set ...")
+        norm_stats = compute_normalization_stats(
+            df            = X,
+            train_indices = train_indices,
+        )
+        save_norm_stats(output_dir, norm_stats)
 
     logger.info("Preprocessing complete.")
+
+    return (X, y), norm_stats, (train_indices, val_indices, test_indices)
 
 
 if __name__ == "__main__":

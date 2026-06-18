@@ -6,7 +6,6 @@
         "val_fraction":   0.2,
         "test_fraction":  0.1,
 
-        "drop_last": false,
         "shuffle": true,
         "split_seed": 42
     },
@@ -29,6 +28,7 @@
     "training": {
         "max_epochs": 21,
         "batch_size": 2048,
+        "drop_last": false,
         "num_workers": 8,
         "optimizer": "adamw",
         "weight_decay": 1.0e-05,
@@ -40,7 +40,7 @@
     },
     "output": {
         "preprocess_dir": "outputs/preprocess",
-        "save_plots": true,
+        "save_plots": false,
         "plots_dir": "outputs/data_statistics",
         "checkpoints_dir": "outputs/checkpoints",
         "evaluate_dir": "outputs/eval"
