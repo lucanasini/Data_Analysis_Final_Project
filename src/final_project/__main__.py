@@ -2,18 +2,15 @@ import argparse
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import torch
+from sklearn.metrics import accuracy_score, log_loss
 from sklearn.svm import SVC
-from sklearn.metrics import log_loss, accuracy_score
 
 from . import __version__
 from .plotting import plot_correlations, plot_norm_stats
 from .preprocess import run_preprocess
 from .utils import (
     load_config_json,
-    get_device,
 )
 
 logging.basicConfig(
@@ -91,12 +88,13 @@ def main():
 
     X_train = X.iloc[train_indices].fillna(0).values
     X_val   = X.iloc[val_indices].fillna(0).values
-    X_test  = X.iloc[test_indices].fillna(0).values
+    # X_test  = X.iloc[test_indices].fillna(0).values
     y_train = y.iloc[train_indices].to_numpy().argmax(axis=1)
     y_val   = y.iloc[val_indices].to_numpy().argmax(axis=1)
-    y_test  = y.iloc[test_indices].to_numpy().argmax(axis=1)
+    # y_test  = y.iloc[test_indices].to_numpy().argmax(axis=1)
 
-    model = SVC(kernel="linear", probability=True, random_state=config["data"].get("split_seed", 42))
+    model = SVC(kernel="linear", probability=True,
+                random_state=config["data"].get("split_seed", 42))
     model.fit(X_train, y_train)
     y_pred_prob = model.predict_proba(X_train)
     y_pred = model.predict(X_train)
@@ -137,7 +135,9 @@ def main():
     # val_dataset   = GN2Dataset(jet_indices=val_indices,   **common_kwargs)
     # test_dataset  = GN2Dataset(jet_indices=test_indices,  **common_kwargs)
 
-    # train_loader = gn2_dataloader(train_dataset, **loader_kwargs, shuffle=config["data"].get("shuffle", False))
+    # train_loader = gn2_dataloader(
+    #     train_dataset, **loader_kwargs,
+    #     shuffle=config["data"].get("shuffle", False))
     # val_loader   = gn2_dataloader(val_dataset,   **loader_kwargs, shuffle=False)
     # test_loader  = gn2_dataloader(test_dataset,  **loader_kwargs, shuffle=False)
 
