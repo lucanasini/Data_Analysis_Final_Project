@@ -10,12 +10,9 @@ from .plotting import plot_correlations
 from .utils import (
     artifact_paths,
     check_artifacts,
-    get_device,
     load_config_json,
     load_indices,
-    load_norm_stats,
 )
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,8 +70,8 @@ def main():
 
     preprocess_dir = Path(config["output"]["preprocess_dir"])
 
-    batch_size  = config["training"].get("batch_size", 1024)
-    shuffle_var = config["data"].get("shuffle", False)
+    # batch_size  = config["training"].get("batch_size", 1024)
+    # shuffle_var = config["data"].get("shuffle", False)
 
     # preprocessing
     paths = artifact_paths(preprocess_dir)
@@ -87,7 +84,7 @@ def main():
         raise FileNotFoundError("Preprocessing failed: artifacts still missing.")
 
     train_indices, val_indices, test_indices = load_indices(preprocess_dir)
-    norm_stats = load_norm_stats(preprocess_dir)
+    # norm_stats = load_norm_stats(preprocess_dir)
 
     if debug_frac < 1.0:
         rng = np.random.default_rng(seed=42)

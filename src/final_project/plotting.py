@@ -10,7 +10,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.metrics import confusion_matrix
 
 matplotlib.use("Agg")
 logger = logging.getLogger("plotting")
