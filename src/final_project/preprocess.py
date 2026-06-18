@@ -20,8 +20,6 @@ Outputs (under ``config["output"]["preprocess_dir"]``):
     │   └── test_indices.npy
     └── norm_stats.json
 """
-import datetime
-print(f"{datetime.datetime.now()} Importing preprocess.py")
 import json
 import logging
 from pathlib import Path

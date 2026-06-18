@@ -3,8 +3,6 @@ utils.py
 ========
 Utility functions for the transformer jet tagging project.
 """
-import datetime
-print(f"{datetime.datetime.now()} Importing utils.py")
 import json
 import logging
 from pathlib import Path

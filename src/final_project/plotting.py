@@ -3,8 +3,6 @@ plotting.py
 ===========
 Visualization module.
 """
-import datetime
-print(f"{datetime.datetime.now()} plotting.py")
 import logging
 from pathlib import Path
 
@@ -26,7 +24,7 @@ logger = logging.getLogger("plotting")
 #     Args:
 #         data_dict (dict): dict of variable name to ``np.ndarray``.
 #         vars_list (list): list of variable names to include in the matrix.
-    
+
 #     Returns:
 #         np.ndarray: shape ``(len(vars_list), len(vars_list))``, correlation matrix.
 #     """
