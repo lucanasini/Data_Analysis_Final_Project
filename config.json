@@ -1,0 +1,48 @@
+{
+    "data": {
+        "file_path": "dataset/golub.csv",
+
+        "train_fraction": 0.7,
+        "val_fraction":   0.2,
+        "test_fraction":  0.1,
+
+        "drop_last": false,
+        "shuffle": true,
+        "split_seed": 42
+    },
+    "model": {
+        "initialiser_hidden_dim": 64,
+        "initialiser_output_dim": 64,
+        "transformer_n_layers": 4,
+        "transformer_n_heads": 8,
+        "transformer_embed_dim": 64,
+        "transformer_ff_dim": 256,
+        "transformer_dropout": 0.0,
+        "pooling_dim": 64,
+        "head_hidden_dims": [
+            128,
+            64,
+            32
+        ],
+        "activation": "relu"
+    },
+    "training": {
+        "max_epochs": 21,
+        "batch_size": 2048,
+        "num_workers": 8,
+        "optimizer": "adamw",
+        "weight_decay": 1.0e-05,
+        "lr_initial": 1.0e-07,
+        "lr_peak": 0.0005,
+        "lr_final": 1.0e-05,
+        "warmup_frac": 0.01,
+        "device": "cuda"
+    },
+    "output": {
+        "preprocess_dir": "outputs/preprocess",
+        "save_plots": true,
+        "plots_dir": "outputs/data_statistics",
+        "checkpoints_dir": "outputs/checkpoints",
+        "evaluate_dir": "outputs/eval"
+    }
+}

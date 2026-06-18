@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+dataset/golub.csv
+FinalTask.pdf
+outputs/preprocess
