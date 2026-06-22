@@ -125,8 +125,8 @@ def plot_norm_stats(
         return
 
     names = np.array(feature_names)[mask]
-    mean  = mean[mask]
-    sigma = sigma[mask]
+    mean  = np.sort(mean[mask])
+    sigma = np.sort(sigma[mask])
 
     if len(names) > max_features:
         logger.warning(

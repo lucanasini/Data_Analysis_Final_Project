@@ -2,9 +2,8 @@
     "data": {
         "file_path": "dataset/golub.csv",
 
-        "train_fraction": 0.7,
-        "val_fraction":   0.2,
-        "test_fraction":  0.1,
+        "cv_fraction": 0.85,
+        "test_fraction":  0.15,
 
         "shuffle": true,
         "split_seed": 42
@@ -26,6 +25,8 @@
         "activation": "relu"
     },
     "training": {
+        "n_splits": 5,
+        "n_repeats": 10,
         "max_epochs": 21,
         "batch_size": 2048,
         "drop_last": false,

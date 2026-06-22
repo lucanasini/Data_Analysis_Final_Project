@@ -2,16 +2,17 @@ import argparse
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score
 from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
 
 from . import __version__
+from .cross_validation import CrossValidation
 from .plotting import plot_correlations, plot_norm_stats
-from .preprocess import run_preprocess
-from .utils import (
-    load_config_json,
-)
+from .preprocess import run_preprocess, compute_normalization_stats
+from .utils import load_config_json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,13 +61,11 @@ def main():
         raise
 
     # preprocessing    
-    (X, y), norm_stats, (train_indices, val_indices, test_indices) = run_preprocess(df, config)
-
+    X_cv, X_test, y_cv, y_test = run_preprocess(df, config)
     logger.info(
-        "Train=%s, Val=%s, Test=%s",
-        f"{len(train_indices):,}",
-        f"{len(val_indices):,}",
-        f"{len(test_indices):,}",
+        "Entries: CV=%s | Test=%s",
+        f"{len(X_cv):,}",
+        f"{len(X_test):,}",
     )
 
     # data statistics plots
@@ -79,118 +78,85 @@ def main():
         )
 
         plot_norm_stats(
-            norm_stats=norm_stats,
-            feature_names=X.columns.tolist(),
+            norm_stats=compute_normalization_stats(X_cv),
+            feature_names=X_cv.columns.tolist(),
             output_dir=plot_dir,
-            max_features=len(X.columns.tolist()),
+            max_features=len(X_cv.columns.tolist()),
         )
 
+    n_splits  = config["training"].get("n_splits", 5)
+    n_repeats = config["training"].get("n_repeats", 10)
+    n_features_to_select = config["training"].get("n_features_to_select", 30)
 
-    X_train = X.iloc[train_indices].fillna(0).values
-    X_val   = X.iloc[val_indices].fillna(0).values
-    # X_test  = X.iloc[test_indices].fillna(0).values
-    y_train = y.iloc[train_indices].to_numpy().argmax(axis=1)
-    y_val   = y.iloc[val_indices].to_numpy().argmax(axis=1)
-    # y_test  = y.iloc[test_indices].to_numpy().argmax(axis=1)
+    rfe_selection_counts, fdr_selection_counts = CrossValidation(
+        X_cv, y_cv,
+        n_splits=n_splits,
+        n_repeats=n_repeats,
+        n_features_to_select=n_features_to_select,
+    )
 
-    model = SVC(kernel="linear", probability=True,
-                random_state=config["data"].get("split_seed", 42))
-    model.fit(X_train, y_train)
-    y_pred_prob = model.predict_proba(X_train)
-    y_pred = model.predict(X_train)
-    train_loss = log_loss(y_train, y_pred_prob)
-    train_acc = accuracy_score(y_train, y_pred)
-    y_val_pred_prob = model.predict_proba(X_val)
-    y_val_pred = model.predict(X_val)
-    val_loss = log_loss(y_val, y_val_pred_prob)
-    val_acc = accuracy_score(y_val, y_val_pred)
+    # 4. CALCOLO STABILITÀ & INCLUSIONE (Task 1 & Task 2)
+    total_runs = n_splits * n_repeats
+    rfe_inclusion_prob = rfe_selection_counts / total_runs
+    fdr_inclusion_prob = fdr_selection_counts / total_runs
 
-    print(f"Train Loss = {train_loss} | Val Loss = {val_loss}")
-    print(f"Train Acc = {train_acc} | Val Acc = {val_acc}")
+    # Ricerca dei biomarcatori più robusti
+    top_rfe_idx = np.argsort(rfe_inclusion_prob)[::-1][:10]
+    print("\n=== TOP 10 BIOMARCATORI PER STABILITÀ (SVM-RFE) ===")
+    for idx in top_rfe_idx:
+        print(f"Gene: {X_cv.columns[idx]} | Probabilità Inclusione: {rfe_inclusion_prob[idx]:.2f}")
+        
+    # Confronto FDR vs Machine Learning
+    overlap = np.sum((rfe_inclusion_prob > 0.5) & (fdr_inclusion_prob > 0.5))
+    print(f"\nNumero di geni stabili (>50% CV) in comune tra FDR e SVM-RFE: {overlap}")
 
+    # 5. VALUTAZIONE FINALE SUL HIDDEN TEST SET (Solo per verifica empirica)
+    # Seleziona i geni che hanno una stabilità globale > 50% nel processo di CV
+    stable_genes_mask = rfe_inclusion_prob > 0.5
+    if np.sum(stable_genes_mask) == 0:  # Fallback se nessuno supera il 50%
+        stable_genes_mask = np.argsort(rfe_inclusion_prob)[::-1][:n_features_to_select]
+        
+    scaler = StandardScaler()
+    X_cv_scaled = scaler.fit_transform(X_cv)
+    X_test_scaled = scaler.transform(X_test)
 
+    final_model = SVC(kernel="linear", probability=True, random_state=42)
+    final_model.fit(X_cv_scaled[:, stable_genes_mask], y_cv)
+    test_preds = final_model.predict(X_test_scaled[:, stable_genes_mask])
 
-
-
-
-
-
-
-
-    # # datasets and dataloaders
-    # common_kwargs = dict(
-    #     file_path  = file_path,
-    #     stats      = norm_stats,
-    # )
-
-    # loader_kwargs = dict(
-    #     batch_size  = config["training"].get("batch_size", 1024),
-    #     num_workers = config["training"].get("num_workers", 0),
-    #     pin_memory  = config["training"].get("device", "auto") in ("gpu", "auto")
-    #                   and torch.cuda.is_available(),
-    #     drop_last   = config["data"].get("drop_last", False),
-    # )
-
-    # train_dataset = GN2Dataset(jet_indices=train_indices, **common_kwargs)
-    # val_dataset   = GN2Dataset(jet_indices=val_indices,   **common_kwargs)
-    # test_dataset  = GN2Dataset(jet_indices=test_indices,  **common_kwargs)
-
-    # train_loader = gn2_dataloader(
-    #     train_dataset, **loader_kwargs,
-    #     shuffle=config["data"].get("shuffle", False))
-    # val_loader   = gn2_dataloader(val_dataset,   **loader_kwargs, shuffle=False)
-    # test_loader  = gn2_dataloader(test_dataset,  **loader_kwargs, shuffle=False)
+    print(f"\nTest Set Accuracy (Sottogruppo Stabile): {accuracy_score(y_test, test_preds):.4f}")
 
 
-    # device = get_device(config["training"].get("device", "auto"))
-    # checkpoint_path = Path(config["output"].get("checkpoints_dir", "outputs/checkpoints"))
-    # if not args.evaluate:
 
-    #     # model
-    #     model_config = config.get("model", {})
-    #     model = GN2(
-    #         n_vars           = X.shape[1],
-    #         n_classes        = y.shape[1],
-    #         init_hidden_dim  = model_config.get("initialiser_hidden_dim"),
-    #         dropout          = model_config.get("transformer_dropout"),
-    #         activation       = model_config.get("activation"),
-    #     ).to(device)
 
-    #     # training
-    #     training_config = config.get("training", {})
-    #     train(
-    #         model        = model,
-    #         train_loader = train_loader,
-    #         val_loader   = val_loader,
-    #         output_dir   = checkpoint_path,
-    #         device       = device,
-    #         optimizer    = training_config.get("optimizer"),
-    #         max_epochs   = training_config.get("max_epochs"),
-    #         warmup_frac  = training_config.get("warmup_frac"),
-    #         weight_decay = training_config.get("weight_decay"),
-    #         lr_initial   = training_config.get("lr_initial"),
-    #         lr_peak      = training_config.get("lr_peak"),
-    #         lr_final     = training_config.get("lr_final"),
-    #         config       = config,
-    #     )
 
-    #     checkpoint_path = sorted(Path(checkpoint_path / "runs").glob("*/best_model.pt"))[-1]
 
-    # else:
-    #     checkpoint_path = checkpoint_path / "best_model/best_model.pt"
 
-    # # evaluation
-    # evaluate(
-    #     test_loader     = test_loader,
-    #     checkpoint_path = checkpoint_path,
-    #     output_dir      = Path(config["output"].get("evaluate_dir", "outputs/eval")),
-    #     device          = device,
-    #     flavour_map     = config["data"]["flavour_map"],
-    #     fc              = config["discriminant"]["fc_btag"],
-    #     ftau_b          = config["discriminant"]["ftau_btag"],
-    #     fb              = config["discriminant"]["fb_ctag"],
-    #     ftau_c          = config["discriminant"]["ftau_ctag"],
-    # )
+
+
+
+
+
+
+
+
+
+
+
+    # model = SVC(kernel="linear", probability=True,
+    #             random_state=config["data"].get("split_seed", 42))
+    # model.fit(X_train, y_train)
+    # y_pred_prob = model.predict_proba(X_train)
+    # y_pred = model.predict(X_train)
+    # train_loss = log_loss(y_train, y_pred_prob)
+    # train_acc = accuracy_score(y_train, y_pred)
+    # y_val_pred_prob = model.predict_proba(X_val)
+    # y_val_pred = model.predict(X_val)
+    # val_loss = log_loss(y_val, y_val_pred_prob)
+    # val_acc = accuracy_score(y_val, y_val_pred)
+
+    # print(f"Train Loss = {train_loss} | Val Loss = {val_loss}")
+    # print(f"Train Acc = {train_acc} | Val Acc = {val_acc}")
 
 
 if __name__ == "__main__":
