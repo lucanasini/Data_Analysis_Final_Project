@@ -8,10 +8,10 @@ from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, log_loss
 from sklearn.model_selection import RepeatedStratifiedKFold
 
-from .feature_selection import statistical_fdr_selection, rfe_svm_selection
+from .feature_selection import statistical_fdr_selection, rfe_svm_selection, lasso_selection
 
 
-logger = logging.getLogger("cross-validation")
+logger = logging.getLogger(f"{"cross-validation":<16}")
 
 def CrossValidation(
     X: pd.DataFrame,
@@ -19,6 +19,8 @@ def CrossValidation(
     n_splits: int,
     n_repeats: int,
     n_features_to_select: int,
+    fdr_alpha: float = 0.05,
+    lasso_C: float = 0.1,
 ):
     """
     Run cross-validation with internal feature selection (FDR + RFE) and training of a linear SVM.
@@ -29,6 +31,8 @@ def CrossValidation(
         n_splits (int): Number of splits for cross-validation.
         n_repeats (int): Number of repeats for cross-validation.
         n_features_to_select (int): Number of features to select.
+        fdr_alpha (float): Significance level for FDR correction (default: ``0.05``).
+        lasso_C (float): Regularization parameter for Lasso (default: ``0.1``).
 
     Returns:
         rfe_selection_counts (np.ndarray): Array with counts of feature selection by RFE.
@@ -36,11 +40,11 @@ def CrossValidation(
     rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=42)
         
     # Array per mappare la stabilità (frequenza di inclusione delle feature)
-    rfe_selection_counts = np.zeros(X.shape[1])
-    fdr_selection_counts = np.zeros(X.shape[1])
+    rfe_selection_counts   = np.zeros(X.shape[1])
+    fdr_selection_counts   = np.zeros(X.shape[1])
+    lasso_selection_counts = np.zeros(X.shape[1]) 
 
-    val_accuracies = []
-    val_losses = []
+    val_accuracies, val_losses = [], []
 
     logger.info("Inizio ciclo di Cross-Validation (%d iterazioni totali)...", n_splits * n_repeats)
 
@@ -55,11 +59,14 @@ def CrossValidation(
         
         # 2. internal feature selection
         # 1st approach: Controllo FDR
-        fdr_mask, _ = statistical_fdr_selection(X_train, y_train, alpha=0.05)
+        fdr_mask, _ = statistical_fdr_selection(X_train, y_train, alpha=fdr_alpha)
         fdr_selection_counts += fdr_mask
         # 2nd approach: SVM-RFE
         rfe_mask = rfe_svm_selection(X_train_scaled, y_train, n_features_to_select=n_features_to_select)
         rfe_selection_counts += rfe_mask
+
+        lasso_mask = lasso_selection(X_train_scaled, y_train, C=lasso_C)
+        lasso_selection_counts += lasso_mask
         
         # 3. training (on RFE gene)
         X_train_sel = X_train_scaled[:, rfe_mask]
@@ -77,6 +84,6 @@ def CrossValidation(
 
     logger.info("CV completata. Val Accuracy Media = %.4f", np.mean(val_accuracies))
 
-    return rfe_selection_counts, fdr_selection_counts
+    return rfe_selection_counts, fdr_selection_counts, lasso_selection_counts
 
     

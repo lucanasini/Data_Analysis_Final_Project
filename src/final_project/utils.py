@@ -18,7 +18,7 @@ from ._constants import (
     SUPPORTED_OPTIMIZERS,
 )
 
-logger = logging.getLogger("utils")
+logger = logging.getLogger(f"{"utils":<16}")
 
 
 def load_config_json(filepath: str | Path) -> dict:

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
-logger = logging.getLogger("plotting")
+logger = logging.getLogger(f"{"plotting":<16}")
 
 
 def _draw_heatmap(ax, corr, labels, title, annotate=True):
@@ -417,6 +417,74 @@ def _plot_roc(
 
     logger.info("Saved: %s", out)
 
+
+def plot_inclusion_probabilities(
+    rfe_inclusion_prob: np.ndarray,
+    fdr_inclusion_prob: np.ndarray,
+    feature_names: list[str],
+    output_dir: str | Path,
+    top_n_labels: int = 20,
+) -> None:
+    """
+    Plot the full distribution of feature inclusion probabilities
+    (across all genes) for both RFE and FDR selection, plus a ranked
+    comparison of the top genes.
+ 
+    Args:
+        rfe_inclusion_prob (np.ndarray): inclusion probability per feature, RFE.
+        fdr_inclusion_prob (np.ndarray): inclusion probability per feature, FDR.
+        feature_names (list[str]): names aligned with the arrays above.
+        output_dir (str | Path): directory where PDFs are saved.
+        top_n_labels (int): how many top genes to annotate in the rank plot.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Plotting full inclusion-probability map ...")
+ 
+    # --- 1. Histograms: how many genes at each stability level ---
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+ 
+    bins = np.linspace(0, 1, 21)
+    axes[0].hist(rfe_inclusion_prob, bins=bins, color="steelblue", edgecolor="k", alpha=0.8)
+    axes[0].set_title("SVM-RFE: inclusion probability distribution")
+    axes[0].set_xlabel("Inclusion probability")
+    axes[0].set_ylabel("Number of genes")
+    axes[0].set_yscale("log")
+    axes[0].grid(True, alpha=0.3)
+ 
+    axes[1].hist(fdr_inclusion_prob, bins=bins, color="darkorange", edgecolor="k", alpha=0.8)
+    axes[1].set_title("FDR (BH): inclusion probability distribution")
+    axes[1].set_xlabel("Inclusion probability")
+    axes[1].set_yscale("log")
+    axes[1].grid(True, alpha=0.3)
+ 
+    fig.tight_layout()
+    out = output_dir / "inclusion_prob_histograms.pdf"
+    fig.savefig(out)
+    plt.close(fig)
+    logger.info("Saved: %s", out)
+ 
+    # --- 2. Sorted rank plot: shows the "cliff" between stable/unstable genes ---
+    order = np.argsort(rfe_inclusion_prob)[::-1]
+    sorted_rfe = rfe_inclusion_prob[order]
+    sorted_fdr = fdr_inclusion_prob[order]
+ 
+    fig, ax = plt.subplots(figsize=(10, 5))
+    x = np.arange(len(sorted_rfe))
+    ax.plot(x, sorted_rfe, label="SVM-RFE", color="steelblue", linewidth=1.5)
+    ax.plot(x, sorted_fdr, label="FDR (BH)", color="darkorange", linewidth=1.5, alpha=0.8)
+    ax.axhline(0.5, color="gray", linestyle="--", linewidth=1, label="50% threshold")
+    ax.set_xlabel("Gene rank (sorted by RFE inclusion prob.)")
+    ax.set_ylabel("Inclusion probability")
+    ax.set_title("Ranked inclusion probabilities across all genes")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+ 
+    fig.tight_layout()
+    out = output_dir / "inclusion_prob_ranked.pdf"
+    fig.savefig(out)
+    plt.close(fig)
+    logger.info("Saved: %s", out)
 
 
 if __name__ == "__main__":

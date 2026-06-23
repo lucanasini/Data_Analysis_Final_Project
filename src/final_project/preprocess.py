@@ -28,7 +28,9 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-logger = logging.getLogger("preprocess")
+from ._constants import CLINICAL_COLS
+
+logger = logging.getLogger(f"{"preprocess":<16}")
 
 
 def compute_normalization_stats(
@@ -105,19 +107,16 @@ def run_preprocess(df: pd.DataFrame, config: dict) -> None:
         ValueError: If the train + val / test fractions do not sum to 1.
     """
     df = df.drop(columns=["Samples"], errors="ignore")
-    X = df.drop("cancer", axis=1)
+    X = df.drop(columns=["cancer"] + CLINICAL_COLS)
     y = df["cancer"]
-
-    cat_cols = X.select_dtypes(exclude=["number"]).columns.tolist()
-    X = pd.get_dummies(X, columns=cat_cols)
 
     # 1. load configuration
     data_config = config["data"]
 
-    cv_frac = data_config["cv_fraction"]
-    test_frac  = data_config["test_fraction"]
-    shuffle = data_config.get("shuffle", False)
-    seed    = data_config.get("split_seed", 42)
+    cv_frac   = data_config["cv_fraction"]
+    test_frac = data_config["test_fraction"]
+    shuffle   = data_config.get("shuffle", False)
+    seed      = data_config.get("split_seed", 42)
 
     total = cv_frac + test_frac
     if abs(total - 1.) > 1e-6:
@@ -133,12 +132,9 @@ def run_preprocess(df: pd.DataFrame, config: dict) -> None:
         train_size   = cv_frac,
         random_state = seed,
         shuffle      = shuffle,
+        stratify     = y,
     )
 
     logger.info("Preprocessing complete.")
 
     return X_cv, X_test, y_cv, y_test
-
-
-if __name__ == "__main__":
-    pass

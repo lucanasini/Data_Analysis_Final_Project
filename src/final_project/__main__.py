@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 
 from . import __version__
 from .cross_validation import CrossValidation
-from .plotting import plot_correlations, plot_norm_stats
+from .plotting import plot_correlations, plot_norm_stats, plot_inclusion_probabilities
 from .preprocess import run_preprocess, compute_normalization_stats
 from .utils import load_config_json
 
@@ -18,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger("MAIN")
+logger = logging.getLogger(f"{"MAIN":<16}")
 
 
 def main():
@@ -69,8 +69,8 @@ def main():
     )
 
     # data statistics plots
+    plot_dir = Path(config["output"].get("plots_dir", "outputs/plots"))
     if config["output"].get("save_plots", False):
-        plot_dir = Path(config["output"].get("plots_dir", "outputs/plots"))
 
         plot_correlations(
             df         = df,
@@ -87,18 +87,30 @@ def main():
     n_splits  = config["training"].get("n_splits", 5)
     n_repeats = config["training"].get("n_repeats", 10)
     n_features_to_select = config["training"].get("n_features_to_select", 30)
+    alpha = config["model"].get("fdr_alpha", 0.05)
+    C     = config["model"].get("lasso_C", 0.1)
 
-    rfe_selection_counts, fdr_selection_counts = CrossValidation(
+    rfe_selection_counts, fdr_selection_counts, lasso_selection_counts = CrossValidation(
         X_cv, y_cv,
         n_splits=n_splits,
         n_repeats=n_repeats,
         n_features_to_select=n_features_to_select,
+        fdr_alpha=alpha,
+        lasso_C=C,
     )
 
     # 4. CALCOLO STABILITÀ & INCLUSIONE (Task 1 & Task 2)
     total_runs = n_splits * n_repeats
-    rfe_inclusion_prob = rfe_selection_counts / total_runs
-    fdr_inclusion_prob = fdr_selection_counts / total_runs
+    rfe_inclusion_prob   = rfe_selection_counts   / total_runs
+    fdr_inclusion_prob   = fdr_selection_counts   / total_runs
+    lasso_inclusion_prob = lasso_selection_counts / total_runs
+
+    plot_inclusion_probabilities(
+        rfe_inclusion_prob=rfe_inclusion_prob,
+        fdr_inclusion_prob=fdr_inclusion_prob,
+        feature_names=X_cv.columns.tolist(),
+        output_dir=plot_dir,
+    )
 
     # Ricerca dei biomarcatori più robusti
     top_rfe_idx = np.argsort(rfe_inclusion_prob)[::-1][:10]
@@ -107,14 +119,27 @@ def main():
         print(f"Gene: {X_cv.columns[idx]} | Probabilità Inclusione: {rfe_inclusion_prob[idx]:.2f}")
         
     # Confronto FDR vs Machine Learning
-    overlap = np.sum((rfe_inclusion_prob > 0.5) & (fdr_inclusion_prob > 0.5))
-    print(f"\nNumero di geni stabili (>50% CV) in comune tra FDR e SVM-RFE: {overlap}")
+    all_three = np.sum(
+        (rfe_inclusion_prob   > 0.5) &
+        (fdr_inclusion_prob   > 0.5) &
+        (lasso_inclusion_prob > 0.5)
+    )
+    print(f"Geni stabili (>50%) in comune tra FDR, RFE e Lasso: {all_three}")
 
     # 5. VALUTAZIONE FINALE SUL HIDDEN TEST SET (Solo per verifica empirica)
     # Seleziona i geni che hanno una stabilità globale > 50% nel processo di CV
     stable_genes_mask = rfe_inclusion_prob > 0.5
     if np.sum(stable_genes_mask) == 0:  # Fallback se nessuno supera il 50%
         stable_genes_mask = np.argsort(rfe_inclusion_prob)[::-1][:n_features_to_select]
+
+    stable_gene_names = X_cv.columns[stable_genes_mask].tolist()
+    df_stable = X_cv[stable_gene_names].copy()
+    df_stable["cancer"] = y_cv.values  # opzionale, per coerenza con plot_correlations
+
+    plot_correlations(
+        df=df_stable.select_dtypes(include="number"),
+        output_dir=plot_dir / "stable_genes_correlation",
+    )
         
     scaler = StandardScaler()
     X_cv_scaled = scaler.fit_transform(X_cv)

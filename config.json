@@ -2,8 +2,8 @@
     "data": {
         "file_path": "dataset/golub.csv",
 
-        "cv_fraction": 0.85,
-        "test_fraction":  0.15,
+        "cv_fraction":   0.6,
+        "test_fraction": 0.4,
 
         "shuffle": true,
         "split_seed": 42
@@ -41,7 +41,7 @@
     },
     "output": {
         "preprocess_dir": "outputs/preprocess",
-        "save_plots": false,
+        "save_plots": true,
         "plots_dir": "outputs/data_statistics",
         "checkpoints_dir": "outputs/checkpoints",
         "evaluate_dir": "outputs/eval"
