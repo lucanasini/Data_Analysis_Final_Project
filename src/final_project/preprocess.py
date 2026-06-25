@@ -2,26 +2,8 @@
 preprocess.py
 =============
 Standalone preprocessing script.
-
-Run this script ONCE before training. It will:
-    1. Load data from the dataset file.
-    3. Split valid indices into train + val / test sets.
-    4. Compute normalization statistics (mean, sigma) on the cross-validation set only.
-    5. Save indices and norm stats to disk.
-
-Outputs (under ``config["output"]["preprocess_dir"]``):
-
-.. code-block:: text
-
-    preprocess_dir/
-    ├── indices/
-    │   ├── cv_indices.npy
-    │   └── test_indices.npy
-    └── norm_stats.json
 """
-import json
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 
 from ._constants import CLINICAL_COLS
 
-logger = logging.getLogger(f"{"preprocess":<16}")
+logger = logging.getLogger(f"{'preprocess':<16}")
 
 
 def compute_normalization_stats(
@@ -67,30 +49,13 @@ def compute_normalization_stats(
     return stats
 
 
-def save_norm_stats(output_dir: str | Path, norm_stats: dict[str, np.ndarray]) -> None:
-    """
-    Serialize normalization statistics (numpy arrays) to ``norm_stats.json``.
-
-    Args:
-        output_dir (str | Path): Directory in which ``norm_stats.json`` will be written.
-        norm_stats (dict): Dict mapping stat name to numpy array.
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / "norm_stats.json"
-
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({k: v.tolist() for k, v in norm_stats.items()}, f, indent=4)
-
-    logger.info("Normalization stats saved to %s", out_path)
-
-
 def run_preprocess(df: pd.DataFrame, config: dict) -> None:
     """
     Run the full preprocessing pipeline.
 
     Reads all settings from ``config`` (already-parsed)
-    and apply One Hot Encoding and split.
+    and performs all preprocessing steps, including train/val/test
+    splitting and cropping of clinical columns.
 
     Config keys read:
         - `data`:
@@ -103,7 +68,7 @@ def run_preprocess(df: pd.DataFrame, config: dict) -> None:
         df (pd.DataFrame): Full dataset dataframe.
         config (dict): Full configuration dict.
 
-    Raises:
+    Warnings:
         ValueError: If the train + val / test fractions do not sum to 1.
     """
     df = df.drop(columns=["Samples"], errors="ignore")

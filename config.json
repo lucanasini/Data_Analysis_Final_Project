@@ -8,41 +8,26 @@
         "shuffle": true,
         "split_seed": 42
     },
-    "model": {
-        "initialiser_hidden_dim": 64,
-        "initialiser_output_dim": 64,
-        "transformer_n_layers": 4,
-        "transformer_n_heads": 8,
-        "transformer_embed_dim": 64,
-        "transformer_ff_dim": 256,
-        "transformer_dropout": 0.0,
-        "pooling_dim": 64,
-        "head_hidden_dims": [
-            128,
-            64,
-            32
-        ],
-        "activation": "relu"
+    "cv": {
+        "alpha": 0.05,
+        "C": 0.1
     },
     "training": {
         "n_splits": 5,
         "n_repeats": 10,
-        "max_epochs": 21,
-        "batch_size": 2048,
-        "drop_last": false,
-        "num_workers": 8,
-        "optimizer": "adamw",
-        "weight_decay": 1.0e-05,
-        "lr_initial": 1.0e-07,
-        "lr_peak": 0.0005,
-        "lr_final": 1.0e-05,
-        "warmup_frac": 0.01,
+        "n_features_to_select": 30,
+
         "device": "cuda"
+    },
+    "bias_experiment": {
+        "run": true,
+        "gene_grid": [5, 10, 20, 50, 100, 200],
+        "permute_labels": true
     },
     "output": {
         "preprocess_dir": "outputs/preprocess",
         "save_plots": true,
-        "plots_dir": "outputs/data_statistics",
+        "plots_dir": "outputs/plots",
         "checkpoints_dir": "outputs/checkpoints",
         "evaluate_dir": "outputs/eval"
     }

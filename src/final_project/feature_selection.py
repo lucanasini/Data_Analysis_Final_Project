@@ -61,7 +61,7 @@ def rfe_svm_selection(
 
 
 def lasso_selection(
-    X_scaled: np.ndarray,
+    X: np.ndarray,
     y: pd.Series,
     C: float = 0.1,
 ) -> np.ndarray:
@@ -76,7 +76,7 @@ def lasso_selection(
     Smaller C -> stronger penalty -> sparser selection.
 
     Args:
-        X_scaled (np.ndarray): standardized feature matrix.
+        X (np.ndarray): feature matrix.
         y (pd.Series): target vector (binary or multiclass).
         C (float): inverse regularization strength (default 0.1).
 
@@ -90,6 +90,6 @@ def lasso_selection(
         random_state=42,
         max_iter=10000,         # saga needs more iterations to converge than liblinear
     )
-    model.fit(X_scaled, y)
+    model.fit(X, y)
     coefs = model.coef_            # shape (n_classes, n_features) for multiclass
     return np.any(coefs != 0, axis=0)
