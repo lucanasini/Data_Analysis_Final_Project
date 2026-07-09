@@ -48,6 +48,7 @@ def plot_correlations(
     df: pd.DataFrame,
     output_dir: str | Path,
     max_vars: int = 7139,
+    plot_name: str = "",
 ) -> None:
     """
     Plot Pearson correlation matrices for jet and track variables.
@@ -55,6 +56,8 @@ def plot_correlations(
     Args:
         df (DataFrame): DataFrame of data file.
         output_dir (str | Path): Directory where PDFs are saved.
+        max_vars (int): Maximum number of variables to plot (default: ``7139``).
+        plot_name (str): Optional suffix for the plot filename (default: "").
 
     Warnings:
         If more than `max_vars` numeric columns are found, only the first `max_vars`
@@ -87,7 +90,8 @@ def plot_correlations(
         ax.set_yticks([])
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
-    out = output_dir / "correlation_matrix.pdf"
+    filename = f"correlation_matrix{"_"+plot_name}.pdf"
+    out = output_dir / filename
     fig.savefig(out)
     plt.close(fig)
 
@@ -177,7 +181,7 @@ def plot_inclusion_probabilities(
 ) -> None:
     """
     Plot the full distribution of feature inclusion probabilities
-    (across all genes) for both RFE and FDR selection, plus a ranked
+    (across all genes) for RFE, FDR and Lasso selection, plus a ranked
     comparison of the top genes.
  
     Args:
@@ -247,53 +251,114 @@ def plot_inclusion_probabilities(
 
 
 def plot_bias_comparison(
-    n_genes_list: list[int],
-    biased_acc: list[float],
-    unbiased_acc: list[float],
+    results: pd.DataFrame,
     chance_level: float,
     output_dir: str | Path,
-    title_suffix: str = "",
-    filename: str = "bias_comparison.pdf",
 ) -> None:
     """
-    Plotta il confronto tra accuratezza "biased" (selezione fuori CV) e
-    "unbiased" (selezione dentro CV) in funzione del numero di geni
-    selezionati, replicando la Fig. 2 di Ambroise & McLachlan (2002).
+    Plot the comparison between "biased" (external feature selection) and
+    "unbiased" (internal feature selection) in terms of accuracy and loss
+    as a function of the number of selected genes, replicating Figure 2 of Ambroise & McLachlan (2002).
 
     Args:
-        n_genes_list (list[int]): numeri di geni testati (asse x).
-        biased_acc (list[float]): accuratezza media, procedura biased.
-        unbiased_acc (list[float]): accuratezza media, procedura unbiased.
-        chance_level (float): accuratezza attesa per puro caso (1/n_classi).
-        output_dir (str | Path): directory dove salvare il PDF.
-        title_suffix (str): testo aggiuntivo per il titolo (es. " (permutato)").
-        filename (str): nome del file di output.
+        results (pd.DataFrame): DataFrame containing the metrics of accuracy and loss.
+        chance_level (float): expected accuracy for random case (1/n_classes).
+        output_dir (str | Path): directory where to save the PDF.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Plotting bias comparison ...")
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(n_genes_list, biased_acc, marker="o", color="crimson",
-            label="Selezione FUORI CV (biased)")
-    ax.plot(n_genes_list, unbiased_acc, marker="o", color="steelblue",
-            label="Selezione DENTRO CV (unbiased)")
-    ax.axhline(chance_level, color="gray", linestyle="--", linewidth=1,
-               label=f"Chance level ({chance_level:.2f})")
+    results["gene"]  = results["parameters"].str[0]
+    results["alpha"] = results["parameters"].str[1]
+    results["C"]     = results["parameters"].str[2]
+    idx  = results.groupby("gene")["unbiased_rfe_val_loss"].idxmin()
+    best = results.loc[idx].sort_values("gene")
 
-    ax.set_xlabel("Numero di geni selezionati")
-    ax.set_ylabel("Accuratezza media (CV)")
-    ax.set_xscale("log")
-    ax.set_title(f"Selection bias: biased vs unbiased{title_suffix}")
+    fig, axes = plt.subplots(1, 2,figsize=(15, 5))
+
+    ax = axes[0]
+    ax.plot(best["gene"], best["biased_rfe_train_acc"],
+            marker="o", ls="-.", color="crimson", label="Train (biased)")
+    ax.plot(best["gene"], best["biased_rfe_val_acc"],
+            marker="o", ls="-", color="crimson", label="Validation (biased)")
+    ax.plot(best["gene"], best["unbiased_rfe_train_acc"],
+            marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
+    ax.plot(best["gene"], best["unbiased_rfe_val_acc"],
+            marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
+    # ax.axhline(chance_level, color="gray", linestyle="--", linewidth=1,
+    #            label=f"Chance level ({chance_level:.2f})")
+    ax.set_xlabel("Number of selected genes")
+    ax.set_ylabel("Average accuracy (CV)")
+    ax.set_xscale("log", base=2)
+    ax.set_title("RFE")
     ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.grid()
+    
+    ax = axes[1]
+    ax.plot(best["gene"], best["biased_lasso_train_acc"],
+            ls=":", color="crimson", label="Train (biased)")
+    ax.plot(best["gene"], best["biased_lasso_val_acc"],
+            ls="--", color="crimson", label="Validation (biased)")
+    ax.plot(best["gene"], best["unbiased_lasso_train_acc"],
+            ls=":", color="steelblue", label="Train (unbiased)")
+    ax.plot(best["gene"], best["unbiased_lasso_val_acc"],
+            ls="--", color="steelblue", label="Validation (unbiased)")
+    # ax.axhline(chance_level, color="gray", linestyle="--", linewidth=1,
+    #            label=f"Chance level ({chance_level:.2f})")
+    ax.set_xlabel("Number of selected genes")
+    ax.set_xscale("log", base=2)
+    ax.set_title("Lasso")
+    ax.legend()
+    ax.grid()
 
+    fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    out = output_dir / filename
-    fig.savefig(out)
+    fig.savefig(output_dir / "bias_comparison_accuracy.pdf")
     plt.close(fig)
 
-    logger.info("Saved: %s", out)
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+    ax = axes[0]
+    ax.plot(best["gene"], best["biased_rfe_train_loss"],
+            marker="o", ls="-.", color="crimson", label="Train (biased)")
+    ax.plot(best["gene"], best["biased_rfe_val_loss"],
+            marker="o", ls="-", color="crimson", label="Validation (biased)")
+    ax.plot(best["gene"], best["unbiased_rfe_train_loss"],
+            marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
+    ax.plot(best["gene"], best["unbiased_rfe_val_loss"],
+            marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
+    ax.set_xlabel("Number of selected genes")
+    ax.set_ylabel("Average loss (CV)")
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_title("RFE")
+    ax.legend()
+    ax.grid()
+    
+    ax = axes[1]
+    ax.plot(best["gene"], best["biased_lasso_train_loss"],
+            linestyle=":", color="crimson", label="Train (biased)")
+    ax.plot(best["gene"], best["biased_lasso_val_loss"],
+            linestyle="--", color="crimson", label="Validation (biased)")
+    ax.plot(best["gene"], best["unbiased_lasso_train_loss"],
+            linestyle=":", color="steelblue", label="Train (unbiased)")
+    ax.plot(best["gene"], best["unbiased_lasso_val_loss"],
+            linestyle="--", color="steelblue", label="Validation (unbiased)")
+    ax.set_xlabel("Number of selected genes")
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_title("Lasso")
+    ax.legend()
+    ax.grid()
+
+    fig.suptitle("Selection bias: biased vs unbiased")
+    fig.tight_layout()
+    fig.savefig(output_dir / "bias_comparison_loss.pdf")
+    plt.close(fig)
+
+    logger.info("Saved: %s", output_dir)
 
 
 if __name__ == "__main__":

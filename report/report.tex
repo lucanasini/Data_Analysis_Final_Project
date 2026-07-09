@@ -1,0 +1,251 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    columns=fullflexible,
+    backgroundcolor=\color{gray!10},
+    frame=single
+}
+
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+\title{Selection Bias and Biomarker Stability in High-Dimensional\\
+Leukemia Gene Expression Classification}
+\author{\todo{Your Name(s)} \\ \todo{Course / Institution}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We address the problem of classifying leukemia subtypes (Acute LymphoblasticLeukemia, ALL, vs. Acute Myeloblastic Leukemia, AML) from $p=7129$ gene expression probes measured on $n=72$ patients.
+Because $p \gg n$, naive model-selection pipelines that perform feature selection \emph{outside} cross-validation produce severely optimistic error estimates, a phenomenon first quantified empirically by Ambroise and McLachlan (2002).
+We replicate their experiment by contrasting a \emph{biased} pipeline (feature selection performed once, on the full dataset, before cross-validation) against an \emph{unbiased} pipeline (feature selection re-performed inside every training fold) for two feature-selection methods (SVM-RFE and $L_1$-penalized logistic regression).
+We further quantify the \emph{stability} of selected biomarkers via gene inclusion probabilities across folds, contrast them with genes flagged by a univariate FDR-controlled ANOVA test, and report final hold-out performance using only genes that are stable across resampling.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==================================================================
+\section{Introduction}
+%==================================================================
+High-throughput gene expression assays (microarrays, RNA-seq) allow simultaneous measurement of thousands of transcripts from a single tissue sample.
+In precision oncology this is used to distinguish molecularly similar but clinically distinct cancer subtypes -- for example, Acute Lymphoblastic Leukemia (ALL) vs. Acute Myeloblastic Leukemia (AML) -- in order to choose the correct chemotherapy protocol.
+
+Statistically, this is a $p \gg n$ classification problem: thousands of candidate predictors (genes), only a few dozen samples, and strong collinearity between genes that participate in the same biological pathways.
+This combination creates two well-known pitfalls that are the core focus of this report:
+
+\begin{enumerate}
+    \item \textbf{Selection bias}: if features are selected using the same data later used to estimate the model's generalization error (e.g. selecting genes on the full dataset and \emph{then} cross-validating the classifier), the resulting accuracy/error estimates are systematically optimistic, sometimes dramatically so \cite{ambroise2002selection}.
+    \item \textbf{Selection instability}: with collinear, high-dimensional features, the \emph{identity} of the "best" gene subset is highly sensitive to which samples happen to be in the training fold. A model can have good accuracy while selecting a different, largely non-reproducible, set of genes every time it is refit.
+\end{enumerate}
+
+Our goals, following the assignment, are therefore not only to produce a classifier with low test error, but to (i) explicitly measure and document the magnitude of the selection bias on this dataset, (ii) report a measure of \emph{biomarker stability} (inclusion probability), and (iii) compare the genes selected by machine-learning wrapper/embedded methods (SVM-RFE, Lasso-logistic-regression) against the genes flagged by a classical univariate test with multiple-testing correction (FDR, Benjamini--Hochberg).
+
+%==================================================================
+\section{Data}
+%==================================================================
+The dataset originates from a clinical leukemia stratification study and contains $n=72$ patients described by:
+\begin{itemize}
+    \item 5 clinical/demographic factors: \texttt{BM.PB} (bone marrow vs. peripheral blood), \texttt{Gender}, \texttt{Source} (originating hospital), \texttt{tissue.mf} (combination of source and gender), and \texttt{Samples} (identifier);
+    \item the target label \texttt{cancer} $\in \{\texttt{allB}, \texttt{allT}, \texttt{aml}\}$;
+    \item $7129$ numeric gene-probe expression values.
+\end{itemize}
+
+\subsection{Binarization of the target}
+The assignment explicitly evaluates models on \emph{binary} classification error, while \texttt{cancer} has three levels.
+We therefore collapse the two ALL subtypes into a single class, giving the clinically standard binary target
+\[
+y \in \{\texttt{ALL}, \texttt{AML}\}, \qquad
+\texttt{ALL} = \{\texttt{allB}, \texttt{allT}\}.
+\]
+This step is performed in \texttt{preprocess.py} \emph{before} the train/test split, and is controlled by a configuration flag (\texttt{binarize\_target}) so that the original 3-class problem remains available for completeness/ablation.
+
+\subsection{Train / test split}
+We hold out a dedicated test set (e.g. $80\%/20\%$, stratified on the binarized label) that is \textbf{never touched} during model selection, feature selection, or hyperparameter tuning -- it is only used once, at the very end, by \texttt{evaluate.py}.
+Stratified, shuffled splitting is used to avoid degenerate folds, since with $n=72$ samples an unshuffled split could easily produce a test set missing one class entirely.
+
+%==================================================================
+\section{Methodology}
+%==================================================================
+
+\subsection{Preprocessing}
+Clinical/demographic columns and the sample identifier are dropped, leaving only the $7129$ gene expression features as predictors.
+Standardization (zero mean, unit variance) is always fit \emph{only} on the current training data (whether that is the full CV set for diagnostic plots, or a single CV fold during model selection) and applied unchanged to the corresponding validation/test partition, to avoid leaking information about the held-out samples into the scaling statistics.
+
+\subsection{Feature selection methods}
+Three independent feature-selection criteria are used:
+
+\begin{description}
+    \item[Univariate FDR test] A one-way ANOVA $F$-test per gene comparing expression across classes, followed by Benjamini--Hochberg correction for multiple testing at level $\alpha$ (typically $0.05$). This provides a purely statistical baseline that does not use any classifier.
+    \item[SVM-RFE] Recursive Feature Elimination with a linear-kernel SVM as the base estimator \cite{guyon2002gene}: at each iteration the $10\%$ least-important features (by SVM weight magnitude) are pruned, until exactly $k$ genes remain.
+    \item[Lasso (L1-logistic)] $L_1$-penalized logistic regression (\texttt{solver="saga"}), where a gene is "selected" if its coefficient is non-zero. The inverse regularization strength $C$ controls sparsity directly.
+\end{description}
+
+\subsection{Biased vs. unbiased cross-validation}
+To replicate the selection-bias experiment of Ambroise and McLachlan \cite{ambroise2002selection}, we compare two pipelines for both SVM-RFE and Lasso:
+
+\begin{itemize}
+    \item \textbf{Biased pipeline}: feature selection (SVM-RFE / Lasso) is performed \emph{once}, on the entire CV dataset (i.e. including what will later become the validation folds). A linear SVM is then trained and validated with repeated stratified $k$-fold CV using only the pre-selected genes.
+    \item \textbf{Unbiased pipeline}: for \emph{every} training fold, feature selection is re-run from scratch on the training portion only, and the corresponding validation fold is scored using only the genes selected from that fold's training data.
+\end{itemize}
+
+Both pipelines are evaluated for several candidate numbers of selected genes $k \in \{10, 20, 30, 50, 100, \dots\}$ (configurable), using $\texttt{n\_splits}\times\texttt{n\_repeats}$ stratified CV.
+We report mean training/validation accuracy and log-loss for both pipelines as a function of $k$, which reproduces Figure 2 of \cite{ambroise2002selection}: the biased validation curve is optimistically close to the training curve (small or negative bias-variance gap), while the unbiased validation curve exposes the true, larger generalization gap.
+
+\subsection{Biomarker stability: inclusion probabilities}
+Within the unbiased CV loop, every time a gene is selected by SVM-RFE, FDR, or Lasso on a given training fold, a per-gene counter is incremented.
+Dividing by the total number of CV iterations ($\texttt{n\_splits}\times\texttt{n\_repeats}$) yields an
+\textbf{inclusion probability} per gene, per method.
+Genes with high inclusion probability ($>0.5$, say) are considered \emph{stable} biomarkers: their selection does not depend on which 80\% of patients happened to be in the training fold.
+This directly targets the assignment's "Variable Selection Stability" requirement and is the natural antidote to the instability induced by collinear gene expression features.
+
+We also report how many genes are jointly stable ($>50\%$ inclusion probability) across \emph{all three} methods (FDR, SVM-RFE, Lasso) -- this addresses the "Control of False Discoveries" requirement, since genes that are both statistically significant \emph{and} repeatedly chosen by two independent ML methods are much less likely to be false discoveries than genes chosen by only one method, by chance, on one particular fold.
+
+\subsection{Final model and held-out evaluation}
+The configuration of $k$ (number of genes) that minimizes the unbiased validation log-loss is selected as "best".
+Using the inclusion probabilities obtained from the corresponding unbiased CV run, we pick the top-$k$ most stable genes for SVM-RFE and, separately, for Lasso. A linear SVM is then refit on the \emph{entire} CV set restricted to each stable gene subset, and evaluated exactly once on the untouched test set.
+This final number is the only one in the report that can be interpreted as an unbiased estimate of real-world generalization performance, since it is the only step where the test set is used.
+
+%==================================================================
+\section{Implementation notes and corrections applied}
+%==================================================================
+During development of the pipeline (\texttt{preprocess.py}, \texttt{feature\_selection.py}, \texttt{cross\_validation.py}, \texttt{bias\_experiment.py}, \texttt{evaluate.py}, \texttt{plotting.py}, \texttt{main.py}), the following issues were identified and fixed to ensure correctness of the final results:
+
+\begin{enumerate}
+    \item \textbf{Inconsistent result-table column} used to build the bias-vs-genes plots: the column collecting the number of selected genes must be appended once per configuration (not once per \texttt{(genes, alpha, C)} triplet), and must be named consistently between the experiment runner and the plotting function.
+    \item \textbf{Index mismatch} when forwarding RFE/Lasso inclusion probabilities from the unbiased cross-validation routine to the final evaluation step (RFE and FDR probabilities were swapped).
+    \item \textbf{Train/test splitting} must use shuffling when stratifying by class, otherwise the split is not well-defined for this small, ordered dataset.
+    \item \textbf{Target binarization} (ALL vs AML) is performed explicitly and documented, since the raw label has three levels but the task requires a binary error metric.
+    \item \textbf{Multi-class log-loss} calls explicitly pass the fitted classifier's \texttt{classes\_} as labels, to avoid undefined behaviour when a cross-validation fold does not contain every class.
+    \item Default hyperparameter grids in the configuration loader are proper lists (e.g. number of genes, FDR $\alpha$, SVM/Lasso $C$), not scalars, since the bias experiment iterates over them.
+\end{enumerate}
+
+%==================================================================
+\section{Results}
+%==================================================================
+
+\subsection{Correlation structure of the raw features}
+\todo{Insert \texttt{correlation\_matrix.pdf} (or a representative subset)
+here, and comment on the degree of multicollinearity observed among gene
+probes.}
+
+\subsection{Selection bias: biased vs. unbiased cross-validation}
+\begin{figure}[h!]
+    \centering
+    \todo{Insert \texttt{bias\_comparison\_accuracy.pdf}}
+    \caption{Mean training/validation accuracy for the biased and unbiased
+    pipelines, as a function of the number of selected genes, for SVM-RFE
+    (left) and Lasso (right).}
+    \label{fig:bias-acc}
+\end{figure}
+
+\begin{figure}[h!]
+    \centering
+    \todo{Insert \texttt{bias\_comparison\_loss.pdf}}
+    \caption{Mean training/validation log-loss, biased vs. unbiased.}
+    \label{fig:bias-loss}
+\end{figure}
+
+\todo{Discuss the gap between the biased and unbiased validation curves
+in Figures~\ref{fig:bias-acc}--\ref{fig:bias-loss}. State explicitly, with
+numbers, how much the biased pipeline overestimates accuracy / underestimates
+loss relative to the unbiased pipeline, and at which $k$ the gap is largest.}
+
+\subsection{Biomarker stability}
+\begin{figure}[h!]
+    \centering
+    \todo{Insert \texttt{inclusion\_prob\_histograms.pdf} and
+    \texttt{inclusion\_prob\_ranked.pdf}}
+    \caption{Distribution and ranked inclusion probabilities for SVM-RFE,
+    FDR, and Lasso.}
+    \label{fig:stability}
+\end{figure}
+
+\begin{table}[h!]
+    \centering
+    \caption{Top-10 most stable genes under SVM-RFE (highest inclusion
+    probability across repeated CV folds).}
+    \label{tab:top-genes}
+    \begin{tabular}{lc}
+        \toprule
+        Gene probe & Inclusion probability \\
+        \midrule
+        \todo{gene 1} & \todo{0.xx} \\
+        \todo{gene 2} & \todo{0.xx} \\
+        \dots & \dots \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\todo{Report the number of genes jointly stable ($>50\%$) across FDR,
+SVM-RFE \emph{and} Lasso, and briefly comment on whether the methods agree
+more than chance would predict.}
+
+\subsection{Final held-out performance}
+\todo{Report final test-set accuracy (and, if relevant, log-loss / confusion
+matrix) for the SVM trained on the top stable RFE genes and on the top
+stable Lasso genes, at the best $k$ identified by the unbiased CV log-loss.}
+
+%==================================================================
+\section{Discussion}
+%==================================================================
+The unbiased pipeline is expected to show a markedly larger gap between training and validation performance than the biased pipeline, especially for small $k$ (strong feature selection) where the opportunity to overfit by "shopping" for predictive genes across the whole dataset is greatest.
+This is the central, reproducible finding of Ambroise and McLachlan \cite{ambroise2002selection}: with $p \gg n$ and feature selection performed outside the resampling loop, cross-validated error estimates can be arbitrarily optimistic, even on data with no true signal (a sanity check that can be obtained by re-running the same pipeline on permuted labels, where the biased method should still report better-than-chance accuracy due to leakage, while the unbiased method should correctly collapse to the chance level $1/n_{\text{classes}}$).
+
+Stability analysis is expected to show that, while SVM-RFE and Lasso each select on the order of $k$ genes per fold by construction, only a fraction of those have inclusion probability above 50\%, confirming that the \emph{identity} of selected genes is far less reproducible than the resulting predictive accuracy would suggest -- precisely the instability that motivates reporting inclusion probabilities rather than a single "best" gene list.
+
+\todo{Add your own commentary once the experiment has actually been run on
+your environment: does the FDR set overlap substantially with the
+ML-selected stable genes? Does increasing $k$ improve stability at the cost
+of sparsity? Which of SVM-RFE or Lasso produces more stable selections on
+this dataset, and why might that be (e.g. Lasso's tendency to arbitrarily
+pick one representative from a group of correlated genes vs. RFE's
+iterative ranking)?}
+
+%==================================================================
+\section{Conclusion}
+%==================================================================
+We implemented and validated a complete pipeline for high-dimensional gene expression classification that explicitly separates feature selection from performance estimation, quantifies the resulting selection bias by replicating the Ambroise--McLachlan experiment, and reports biomarker stability via per-gene inclusion probabilities under repeated cross-validation.
+The methodology -- rather than the raw test accuracy of any single model -- is the primary contribution requested by the assignment: a small, sparse, and cross-validated-stable set of biomarkers is of much greater scientific and clinical value than a marginally higher accuracy obtained through a biased, non-reproducible selection procedure.
+
+%==================================================================
+\begin{thebibliography}{9}
+
+\bibitem{ambroise2002selection}
+C. Ambroise and G. J. McLachlan,
+\emph{Selection bias in gene extraction on the basis of microarray gene-expression data},
+Proceedings of the National Academy of Sciences, 99(10), 6562--6566, 2002.
+
+\bibitem{guyon2002gene}
+I. Guyon, J. Weston, S. Barnhill, V. Vapnik,
+\emph{Gene Selection for Cancer Classification using Support Vector Machines},
+Machine Learning, 46, 389--422, 2002.
+
+\end{thebibliography}
+
+\end{document}

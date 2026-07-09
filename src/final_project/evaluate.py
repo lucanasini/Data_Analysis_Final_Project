@@ -16,6 +16,7 @@ from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 
 from .plotting import plot_correlations
+from ._constants import SEED
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,9 +31,9 @@ def evaluate(
     X_test: pd.DataFrame,
     y_test: pd.DataFrame,
     n_features_to_select: int,
-    fdr_inclusion_prob: np.ndarray,
     rfe_inclusion_prob: np.ndarray,
     lasso_inclusion_prob: np.ndarray,
+    kernel: str = "linear",
     plot_dir: str | Path = None
 ):
     """
@@ -44,22 +45,16 @@ def evaluate(
         X_test (pd.DataFrame): Test feature matrix.
         y_test (pd.DataFrame): Test target vector.
         n_features_to_select (int): Number of features to select based on RFE inclusion probabilities.
-        fdr_inclusion_prob (np.ndarray): Array of inclusion probabilities for each gene from FDR.
         rfe_inclusion_prob (np.ndarray): Array of inclusion probabilities for each gene from RFE.
         lasso_inclusion_prob (np.ndarray): Array of inclusion probabilities for each gene from Lasso.
         plot_dir (str | Path): Directory to save correlation plots (optional, default is ``None``).
     """
-    # select genes that have a global stability > 50% in the CV process
-    stable_genes_mask_rfe = rfe_inclusion_prob > 0.5
-    if np.sum(stable_genes_mask_rfe) == 0:              # Fallback if none exceed the 50% threshold
-        stable_genes_mask_rfe = np.argsort(rfe_inclusion_prob)[::-1][:n_features_to_select]
-    stable_genes_mask_lasso = lasso_inclusion_prob > 0.5
-    if np.sum(stable_genes_mask_lasso) == 0:            # Fallback if none exceed the 50% threshold
-        stable_genes_mask_lasso = np.argsort(lasso_inclusion_prob)[::-1][:n_features_to_select]
+    stable_genes_mask_rfe = np.argsort(rfe_inclusion_prob)[::-1][:n_features_to_select]
+    stable_genes_mask_lasso = np.argsort(lasso_inclusion_prob)[::-1][:n_features_to_select]
 
-    stable_gene_names_rfe   = X_cv.columns[stable_genes_mask_rfe].tolist()
-    df_stable_rfe           = X_cv[stable_gene_names_rfe].copy()
-    df_stable_rfe["cancer"] = y_cv.values
+    stable_gene_names_rfe     = X_cv.columns[stable_genes_mask_rfe].tolist()
+    df_stable_rfe             = X_cv[stable_gene_names_rfe].copy()
+    df_stable_rfe["cancer"]   = y_cv.values
     stable_gene_names_lasso   = X_cv.columns[stable_genes_mask_lasso].tolist()
     df_stable_lasso           = X_cv[stable_gene_names_lasso].copy()
     df_stable_lasso["cancer"] = y_cv.values
@@ -67,20 +62,22 @@ def evaluate(
     if plot_dir is not None:
         plot_correlations(
             df=df_stable_rfe.select_dtypes(include="number"),
-            output_dir=plot_dir / "stable_genes_correlation_rfe",
+            output_dir=plot_dir,
+            plot_name="stable_genes_rfe"
         )
         plot_correlations(
             df=df_stable_lasso.select_dtypes(include="number"),
-            output_dir=plot_dir / "stable_genes_correlation_lasso",
+            output_dir=plot_dir,
+            plot_name="stable_genes_lasso"
         )
         
     scaler = StandardScaler()
     X_cv   = scaler.fit_transform(X_cv)
     X_test = scaler.transform(X_test)
 
-    final_model_rfe = SVC(kernel="linear", probability=True, random_state=42)
+    final_model_rfe = SVC(kernel=kernel, probability=True, random_state=SEED)
     final_model_rfe.fit(X_cv[:, stable_genes_mask_rfe], y_cv)
-    final_model_lasso = SVC(kernel="linear", probability=True, random_state=42)
+    final_model_lasso = SVC(kernel=kernel, probability=True, random_state=SEED)
     final_model_lasso.fit(X_cv[:, stable_genes_mask_lasso], y_cv)
 
     test_preds_rfe   = final_model_rfe.predict(X_test[:, stable_genes_mask_rfe])

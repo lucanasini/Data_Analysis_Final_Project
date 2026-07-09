@@ -7,6 +7,8 @@ from statsmodels.stats.multitest import multipletests
 from sklearn.feature_selection import RFE
 from sklearn.svm import SVC
 
+from ._constants import SEED
+
 
 def statistical_fdr_selection(
     X: pd.DataFrame,
@@ -20,7 +22,7 @@ def statistical_fdr_selection(
     Args:
         X (pd.DataFrame): Feature matrix.
         y (pd.Series): Target vector.
-        alpha (float): Significance level for FDR correction (default: ``0.0``).
+        alpha (float): Significance level for FDR correction (default: ``0.05``).
     
     Returns:
         reject (np.ndarray): Boolean mask of significant genes.
@@ -41,7 +43,8 @@ def statistical_fdr_selection(
 def rfe_svm_selection(
     X_scaled: np.ndarray,
     y: pd.Series,
-    n_features_to_select: int = 30
+    n_features_to_select: int = 30,
+    kernel: str = "linear"
 ):
     """
     RFE with Linear SVM (inspired by Guyon et al., 2002).
@@ -54,7 +57,7 @@ def rfe_svm_selection(
     Returns:
         selector.support_ (np.ndarray): Boolean mask of selected features.
     """
-    estimator = SVC(kernel="linear", random_state=42)
+    estimator = SVC(kernel=kernel, random_state=SEED)
     selector = RFE(estimator=estimator, n_features_to_select=n_features_to_select, step=0.1)
     selector.fit(X_scaled, y)
     return selector.support_
@@ -84,10 +87,10 @@ def lasso_selection(
         np.ndarray: boolean mask of selected features.
     """
     model = LogisticRegression(
-        penalty="l1",
         solver="saga",          # supports l1 + multinomial multiclass
         C=C,
-        random_state=42,
+        l1_ratio=1.0,
+        random_state=SEED,
         max_iter=10000,         # saga needs more iterations to converge than liblinear
     )
     model.fit(X, y)

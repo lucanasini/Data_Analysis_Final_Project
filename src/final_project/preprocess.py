@@ -75,12 +75,15 @@ def run_preprocess(df: pd.DataFrame, config: dict) -> None:
     X = df.drop(columns=["cancer"] + CLINICAL_COLS)
     y = df["cancer"]
 
+    if config["data"].get("binarize_target", True):
+        y = y.replace({"allB": "ALL", "allT": "ALL"})
+
     # 1. load configuration
     data_config = config["data"]
 
     cv_frac   = data_config["cv_fraction"]
     test_frac = data_config["test_fraction"]
-    shuffle   = data_config.get("shuffle", False)
+    shuffle   = data_config.get("shuffle", True)
     seed      = data_config.get("split_seed", 42)
 
     total = cv_frac + test_frac

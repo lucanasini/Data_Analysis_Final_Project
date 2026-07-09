@@ -2,18 +2,19 @@ import argparse
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import __version__
 from .bias_experiment import run_bias_experiment
-from .cross_validation import CrossValidation
+from .cross_validation import CrossValidationUnbiased
 from .evaluate import evaluate
 from .plotting import plot_correlations, plot_norm_stats
 from .preprocess import run_preprocess, compute_normalization_stats
 from .utils import load_config_json
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(f"{'MAIN':<16}")
@@ -80,57 +81,34 @@ def main():
     # cross-validation parameters
     n_splits  = config["training"].get("n_splits", 5)
     n_repeats = config["training"].get("n_repeats", 10)
-    n_features_to_select = config["training"].get("n_features_to_select", 30)
-    alpha = config["cv"].get("alpha", 0.05)
-    C     = config["cv"].get("C", 0.1)
+    genes     = config["training"].get("genes", 30) if isinstance(config["training"].get("genes", 30), list) else [config["training"].get("genes", 30)]
+    alpha     = config["training"].get("alpha", 0.05) if isinstance(config["training"].get("alpha", 0.05), list) else [config["training"].get("alpha", 0.05)]
+    C         = config["training"].get("C", 0.1) if isinstance(config["training"].get("C", 0.1), list) else [config["training"].get("C", 0.1)]
 
-    # cross-validation
-    rfe_inclusion_prob, fdr_inclusion_prob, lasso_inclusion_prob = CrossValidation(
+    # selection bias experiment (Ambroise & McLachlan, 2002)
+    logger.info("=== Selection bias experiment ===")
+    results, inclusion_probs = run_bias_experiment(
         X_cv, y_cv,
         n_splits   = n_splits,
         n_repeats  = n_repeats,
-        parameters = [n_features_to_select, alpha, C],
+        parameters = [genes, alpha, C],
         plot_dir   = plot_dir,
     )
+
+    best_run_index = np.argmin(np.minimum(results["biased_rfe_val_loss"], results["unbiased_rfe_val_loss"]))
+    best_inclusion_prob = inclusion_probs[best_run_index]
+    print(f"best index: {best_run_index} | best parameters: {results["parameters"][best_run_index]}")
+
 
     # evaluation
     evaluate(
         X_cv,   y_cv,
         X_test, y_test,
-        n_features_to_select = n_features_to_select,
-        fdr_inclusion_prob   = fdr_inclusion_prob,
-        rfe_inclusion_prob   = rfe_inclusion_prob,
-        lasso_inclusion_prob = lasso_inclusion_prob,
+        n_features_to_select = results["parameters"][best_run_index][0],
+        rfe_inclusion_prob   = best_inclusion_prob[0],
+        lasso_inclusion_prob = best_inclusion_prob[2],
         plot_dir = plot_dir,
     )
-
-    # esperimento di selection bias (Ambroise & McLachlan, 2002)
-    if config.get("bias_experiment", {}).get("run", False):
-        gene_grid = config["bias_experiment"].get(
-            "gene_grid", [5, 10, 20, 50, 100, 200]
-        )
-        permute = config["bias_experiment"].get("permute_labels", False)
-
-        logger.info("=== Esperimento selection bias (dati reali) ===")
-        run_bias_experiment(
-            X_cv, y_cv,
-            n_splits   = n_splits,
-            n_repeats  = n_repeats,
-            gene_grid  = gene_grid,
-            plot_dir   = plot_dir,
-            permute_labels = False,
-        )
-
-        if permute:
-            logger.info("=== Esperimento selection bias (etichette permutate / null model) ===")
-            run_bias_experiment(
-                X_cv, y_cv,
-                n_splits   = n_splits,
-                n_repeats  = n_repeats,
-                gene_grid  = gene_grid,
-                plot_dir   = plot_dir,
-                permute_labels = True,
-            )
 
 if __name__ == "__main__":
     main()
