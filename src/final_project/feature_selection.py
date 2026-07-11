@@ -1,11 +1,10 @@
 import numpy as np
 import pandas as pd
-
-from sklearn.linear_model import LogisticRegression
 from scipy.stats import f_oneway
-from statsmodels.stats.multitest import multipletests
 from sklearn.feature_selection import RFE
+from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from statsmodels.stats.multitest import multipletests
 
 from ._constants import SEED
 
@@ -87,11 +86,11 @@ def lasso_selection(
         np.ndarray: boolean mask of selected features.
     """
     model = LogisticRegression(
+        penalty="l1",
         solver="saga",          # supports l1 + multinomial multiclass
         C=C,
-        l1_ratio=1.0,
         random_state=SEED,
-        max_iter=10000,         # saga needs more iterations to converge than liblinear
+        max_iter=10000,
     )
     model.fit(X, y)
     coefs = model.coef_            # shape (n_classes, n_features) for multiclass

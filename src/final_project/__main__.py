@@ -1,5 +1,6 @@
 import argparse
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -7,10 +8,9 @@ import pandas as pd
 
 from . import __version__
 from .bias_experiment import run_bias_experiment
-from .cross_validation import CrossValidationUnbiased
 from .evaluate import evaluate
 from .plotting import plot_correlations, plot_norm_stats
-from .preprocess import run_preprocess, compute_normalization_stats
+from .preprocess import compute_normalization_stats, run_preprocess
 from .utils import load_config_json
 
 logging.basicConfig(
@@ -81,34 +81,56 @@ def main():
     # cross-validation parameters
     n_splits  = config["training"].get("n_splits", 5)
     n_repeats = config["training"].get("n_repeats", 10)
-    genes     = config["training"].get("genes", 30) if isinstance(config["training"].get("genes", 30), list) else [config["training"].get("genes", 30)]
-    alpha     = config["training"].get("alpha", 0.05) if isinstance(config["training"].get("alpha", 0.05), list) else [config["training"].get("alpha", 0.05)]
-    C         = config["training"].get("C", 0.1) if isinstance(config["training"].get("C", 0.1), list) else [config["training"].get("C", 0.1)]
+    genes     = (config["training"].get("genes", 30)
+                 if isinstance(config["training"].get("genes", 30), list)
+                 else [config["training"].get("genes", 30)])
+    alpha     = (config["training"].get("alpha", 0.05)
+                 if isinstance(config["training"].get("alpha", 0.05), list)
+                else [config["training"].get("alpha", 0.05)])
+    C         = (config["training"].get("C", 0.1)
+                 if isinstance(config["training"].get("C", 0.1), list)
+                else [config["training"].get("C", 0.1)])
 
+    run_dir = plot_dir / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # selection bias experiment (Ambroise & McLachlan, 2002)
-    logger.info("=== Selection bias experiment ===")
-    results, inclusion_probs = run_bias_experiment(
-        X_cv, y_cv,
-        n_splits   = n_splits,
-        n_repeats  = n_repeats,
-        parameters = [genes, alpha, C],
-        plot_dir   = plot_dir,
-    )
+    if not args.evaluate:
+        logger.info("=== Selection bias experiment ===")
+        results, inclusion_probs = run_bias_experiment(
+            X_cv, y_cv,
+            n_splits   = n_splits,
+            n_repeats  = n_repeats,
+            parameters = [genes, alpha, C],
+            plot_dir   = plot_dir,
+        )
 
-    best_run_index = np.argmin(np.minimum(results["biased_rfe_val_loss"], results["unbiased_rfe_val_loss"]))
-    best_inclusion_prob = inclusion_probs[best_run_index]
-    print(f"best index: {best_run_index} | best parameters: {results["parameters"][best_run_index]}")
+        best_run_index = np.argmin(np.minimum(results["biased_rfe_val_loss"],
+                                            results["unbiased_rfe_val_loss"]))
+        best_inclusion_prob = inclusion_probs[best_run_index]
+        logger.info("Best index: %d | Best parameters: %s",
+                    best_run_index, results["parameters"].iloc[best_run_index])
+
+        results.to_csv(run_dir / f"bias_experiment_results_{timestamp}.csv", index=False)
+    
+    else:
+        latest_csv = max(run_dir.glob("bias_experiment_results_*.csv"), key=lambda p: p.stat().st_mtime)
+        results = pd.read_csv(latest_csv)
+        best_run_index = np.argmin(np.minimum(results["biased_rfe_val_loss"], results["unbiased_rfe_val_loss"]))
 
 
     # evaluation
-    evaluate(
+    test_results = evaluate(
         X_cv,   y_cv,
         X_test, y_test,
-        n_features_to_select = results["parameters"][best_run_index][0],
+        n_features_to_select = results["parameters"].iloc[best_run_index][0],
         rfe_inclusion_prob   = best_inclusion_prob[0],
         lasso_inclusion_prob = best_inclusion_prob[2],
         plot_dir = plot_dir,
     )
+    
+    test_results.to_csv(run_dir / f"test_results_{timestamp}.csv", index=False)
+
 
 if __name__ == "__main__":
     main()
