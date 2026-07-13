@@ -9,14 +9,15 @@ Elimination (RFE) and plotting correlations among these genes.
 import logging
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, log_loss, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 from ._constants import SEED
 from .plotting import plot_correlations
+from .utils import calculate_metrics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,7 +55,7 @@ def evaluate(
         plot_dir (str | Path): Directory to save correlation plots (optional, default is ``None``).
     """
     stable_genes_mask_rfe = np.argsort(rfe_inclusion_prob)[::-1][:n_features_to_select]
-    stable_genes_mask_lasso = np.argsort(lasso_inclusion_prob)[::-1][:n_features_to_select]
+    stable_genes_mask_lasso = np.argsort(lasso_inclusion_prob)[::-1][:]
 
     stable_gene_names_rfe     = X_cv.columns[stable_genes_mask_rfe].tolist()
     df_stable_rfe             = X_cv[stable_gene_names_rfe].copy()
@@ -89,32 +90,24 @@ def evaluate(
     test_preds_lasso = final_model_lasso.predict(X_test[:, stable_genes_mask_lasso])
     test_probs_lasso = final_model_lasso.predict_proba(X_test[:, stable_genes_mask_lasso])
 
-    test_rfe_accuracy    = accuracy_score(y_test, test_preds_rfe)
-    test_lasso_accuracy  = accuracy_score(y_test, test_preds_lasso)
-    test_rfe_loss        = log_loss(y_test, test_probs_rfe, labels=final_model_rfe.classes_)
-    test_lasso_loss      = log_loss(y_test, test_probs_lasso, labels=final_model_lasso.classes_)
-    test_rfe_precision   = precision_score(y_test, test_preds_rfe, pos_label=final_model_rfe.classes_[1])
-    test_lasso_precision = precision_score(y_test, test_preds_lasso, pos_label=final_model_lasso.classes_[1])
-    test_rfe_recall      = recall_score(y_test, test_preds_rfe, pos_label=final_model_rfe.classes_[1])
-    test_lasso_recall    = recall_score(y_test, test_preds_lasso, pos_label=final_model_lasso.classes_[1])
-    test_rfe_f1_score    = f1_score(y_test, test_preds_rfe, pos_label=final_model_rfe.classes_[1])
-    test_lasso_f1_score  = f1_score(y_test, test_preds_lasso, pos_label=final_model_lasso.classes_[1])
-    test_rfe_roc_auc     = roc_auc_score(y_test, test_probs_rfe[:, 1], labels=final_model_rfe.classes_)
-    test_lasso_roc_auc   = roc_auc_score(y_test, test_probs_lasso[:, 1], labels=final_model_lasso.classes_)
-    
+    rfe_metrics   = calculate_metrics(y_test, test_preds_rfe,   test_probs_rfe,   final_model_rfe)
+    lasso_metrics = calculate_metrics(y_test, test_preds_lasso, test_probs_lasso, final_model_lasso)
+
+    joblib.dump(final_model_rfe, plot_dir / "run" / "rfe_model.joblib")
+    joblib.dump(final_model_lasso, plot_dir / "run" / "lasso_model.joblib")
 
     logger.info(
         "Test RFE   -> Acc: %.4f | Loss: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f | AUC: %.4f",
-        test_rfe_accuracy, test_rfe_loss, test_rfe_precision, test_rfe_recall, test_rfe_f1_score, test_rfe_roc_auc
+        rfe_metrics["accuracy"], rfe_metrics["loss"], rfe_metrics["precision"],
+        rfe_metrics["recall"], rfe_metrics["f1_score"], rfe_metrics["roc_auc"]
     )
     logger.info(
         "Test Lasso -> Acc: %.4f | Loss: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f | AUC: %.4f",
-        test_lasso_accuracy, test_lasso_loss, test_lasso_precision, test_lasso_recall, test_lasso_f1_score, test_lasso_roc_auc
+        lasso_metrics["accuracy"], lasso_metrics["loss"], lasso_metrics["precision"],
+        lasso_metrics["recall"], lasso_metrics["f1_score"], lasso_metrics["roc_auc"]
     )
 
     return pd.DataFrame([{
-        "rfe":   dict(accuracy=test_rfe_accuracy, loss=test_rfe_loss, precision=test_rfe_precision,
-                    recall=test_rfe_recall, f1=test_rfe_f1_score, roc_auc=test_rfe_roc_auc),
-        "lasso": dict(accuracy=test_lasso_accuracy, loss=test_lasso_loss, precision=test_lasso_precision,
-                    recall=test_lasso_recall, f1=test_lasso_f1_score, roc_auc=test_lasso_roc_auc),
+        "rfe":   rfe_metrics,
+        "lasso": lasso_metrics,
     }])

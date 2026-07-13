@@ -266,69 +266,68 @@ def plot_bias_comparison(
         chance_level (float): expected accuracy for random case (1/n_classes).
         output_dir (str | Path): directory where to save the PDF.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir = Path(output_dir) / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Plotting bias comparison ...")
 
-    results["gene"]  = results["parameters"].str[0]
-    results["alpha"] = results["parameters"].str[1]
-    results["C"]     = results["parameters"].str[2]
-    idx  = results.groupby("gene")["unbiased_rfe_val_loss"].idxmin()
-    best = results.loc[idx].sort_values("gene")
+    idx  = results.groupby("n_genes")["unbiased_rfe_val_loss"].idxmin()
+    best = results.loc[idx].sort_values("n_genes")
 
     fig, axes = plt.subplots(1, 2,figsize=(15, 5))
 
     ax = axes[0]
-    ax.plot(best["gene"], best["biased_rfe_train_acc"],
+    ax.plot(best["n_genes"], best["biased_rfe_train_acc"],
             marker="o", ls="-.", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_rfe_val_acc"],
+    ax.plot(best["n_genes"], best["biased_rfe_val_acc"],
             marker="o", ls="-", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_rfe_train_acc"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_train_acc"],
             marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_rfe_val_acc"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_val_acc"],
             marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
     # ax.axhline(chance_level, color="gray", linestyle="--", linewidth=1,
     #            label=f"Chance level ({chance_level:.2f})")
     ax.set_xlabel("Number of selected genes")
     ax.set_ylabel("Average accuracy (CV)")
     ax.set_xscale("log", base=2)
+    # ax.set_yscale("logit")
     ax.set_title("RFE")
     ax.legend()
     ax.grid()
     
     ax = axes[1]
-    ax.plot(best["gene"], best["biased_lasso_train_acc"],
+    ax.plot(best["n_genes"], best["biased_lasso_train_acc"],
             ls=":", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_lasso_val_acc"],
+    ax.plot(best["n_genes"], best["biased_lasso_val_acc"],
             ls="--", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_lasso_train_acc"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_train_acc"],
             ls=":", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_lasso_val_acc"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_val_acc"],
             ls="--", color="steelblue", label="Validation (unbiased)")
     # ax.axhline(chance_level, color="gray", linestyle="--", linewidth=1,
     #            label=f"Chance level ({chance_level:.2f})")
     ax.set_xlabel("Number of selected genes")
     ax.set_xscale("log", base=2)
+    # ax.set_yscale("logit")
     ax.set_title("Lasso")
     ax.legend()
     ax.grid()
 
     fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    fig.savefig(output_dir / "bias_comparison_accuracy.pdf")
+    fig.savefig(metrics_dir / "accuracy_bias_comparison.pdf")
     plt.close(fig)
 
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     ax = axes[0]
-    ax.plot(best["gene"], best["biased_rfe_train_loss"],
+    ax.plot(best["n_genes"], best["biased_rfe_train_loss"],
             marker="o", ls="-.", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_rfe_val_loss"],
+    ax.plot(best["n_genes"], best["biased_rfe_val_loss"],
             marker="o", ls="-", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_rfe_train_loss"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_train_loss"],
             marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_rfe_val_loss"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_val_loss"],
             marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_ylabel("Average loss (CV)")
@@ -339,13 +338,13 @@ def plot_bias_comparison(
     ax.grid()
     
     ax = axes[1]
-    ax.plot(best["gene"], best["biased_lasso_train_loss"],
+    ax.plot(best["n_genes"], best["biased_lasso_train_loss"],
             linestyle=":", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_lasso_val_loss"],
+    ax.plot(best["n_genes"], best["biased_lasso_val_loss"],
             linestyle="--", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_lasso_train_loss"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_train_loss"],
             linestyle=":", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_lasso_val_loss"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_val_loss"],
             linestyle="--", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_xscale("log", base=2)
@@ -356,170 +355,170 @@ def plot_bias_comparison(
 
     fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    fig.savefig(output_dir / "bias_comparison_loss.pdf")
+    fig.savefig(metrics_dir / "loss_bias_comparison.pdf")
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     ax = axes[0]
-    ax.plot(best["gene"], best["biased_rfe_train_precision"],
+    ax.plot(best["n_genes"], best["biased_rfe_train_precision"],
             marker="o", ls="-.", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_rfe_val_precision"],
+    ax.plot(best["n_genes"], best["biased_rfe_val_precision"],
             marker="o", ls="-", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_rfe_train_precision"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_train_precision"],
             marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_rfe_val_precision"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_val_precision"],
             marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_ylabel("Average precision (CV)")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("RFE")
     ax.legend()
     ax.grid()
     
     ax = axes[1]
-    ax.plot(best["gene"], best["biased_lasso_train_precision"],
+    ax.plot(best["n_genes"], best["biased_lasso_train_precision"],
             linestyle=":", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_lasso_val_precision"],
+    ax.plot(best["n_genes"], best["biased_lasso_val_precision"],
             linestyle="--", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_lasso_train_precision"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_train_precision"],
             linestyle=":", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_lasso_val_precision"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_val_precision"],
             linestyle="--", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("Lasso")
     ax.legend()
     ax.grid()
 
     fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    fig.savefig(output_dir / "bias_comparison_precision.pdf")
+    fig.savefig(metrics_dir / "precision_bias_comparison.pdf")
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     ax = axes[0]
-    ax.plot(best["gene"], best["biased_rfe_train_recall"],
+    ax.plot(best["n_genes"], best["biased_rfe_train_recall"],
             marker="o", ls="-.", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_rfe_val_recall"],
+    ax.plot(best["n_genes"], best["biased_rfe_val_recall"],
             marker="o", ls="-", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_rfe_train_recall"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_train_recall"],
             marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_rfe_val_recall"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_val_recall"],
             marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_ylabel("Average recall (CV)")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("RFE")
     ax.legend()
     ax.grid()
     
     ax = axes[1]
-    ax.plot(best["gene"], best["biased_lasso_train_recall"],
+    ax.plot(best["n_genes"], best["biased_lasso_train_recall"],
             linestyle=":", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_lasso_val_recall"],
+    ax.plot(best["n_genes"], best["biased_lasso_val_recall"],
             linestyle="--", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_lasso_train_recall"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_train_recall"],
             linestyle=":", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_lasso_val_recall"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_val_recall"],
             linestyle="--", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("Lasso")
     ax.legend()
     ax.grid()
 
     fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    fig.savefig(output_dir / "bias_comparison_recall.pdf")
+    fig.savefig(metrics_dir / "recall_bias_comparison.pdf")
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     ax = axes[0]
-    ax.plot(best["gene"], best["biased_rfe_train_f1_score"],
+    ax.plot(best["n_genes"], best["biased_rfe_train_f1_score"],
             marker="o", ls="-.", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_rfe_val_f1_score"],
+    ax.plot(best["n_genes"], best["biased_rfe_val_f1_score"],
             marker="o", ls="-", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_rfe_train_f1_score"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_train_f1_score"],
             marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_rfe_val_f1_score"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_val_f1_score"],
             marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_ylabel("Average f1_score (CV)")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("RFE")
     ax.legend()
     ax.grid()
     
     ax = axes[1]
-    ax.plot(best["gene"], best["biased_lasso_train_f1_score"],
+    ax.plot(best["n_genes"], best["biased_lasso_train_f1_score"],
             linestyle=":", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_lasso_val_f1_score"],
+    ax.plot(best["n_genes"], best["biased_lasso_val_f1_score"],
             linestyle="--", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_lasso_train_f1_score"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_train_f1_score"],
             linestyle=":", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_lasso_val_f1_score"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_val_f1_score"],
             linestyle="--", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("Lasso")
     ax.legend()
     ax.grid()
 
     fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    fig.savefig(output_dir / "bias_comparison_f1_score.pdf")
+    fig.savefig(metrics_dir / "f1_score_bias_comparison.pdf")
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     ax = axes[0]
-    ax.plot(best["gene"], best["biased_rfe_train_roc_auc"],
+    ax.plot(best["n_genes"], best["biased_rfe_train_roc_auc"],
             marker="o", ls="-.", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_rfe_val_roc_auc"],
+    ax.plot(best["n_genes"], best["biased_rfe_val_roc_auc"],
             marker="o", ls="-", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_rfe_train_roc_auc"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_train_roc_auc"],
             marker="o", ls="-.", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_rfe_val_roc_auc"],
+    ax.plot(best["n_genes"], best["unbiased_rfe_val_roc_auc"],
             marker="o", ls="-", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_ylabel("Average roc_auc (CV)")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("RFE")
     ax.legend()
     ax.grid()
     
     ax = axes[1]
-    ax.plot(best["gene"], best["biased_lasso_train_roc_auc"],
+    ax.plot(best["n_genes"], best["biased_lasso_train_roc_auc"],
             linestyle=":", color="crimson", label="Train (biased)")
-    ax.plot(best["gene"], best["biased_lasso_val_roc_auc"],
+    ax.plot(best["n_genes"], best["biased_lasso_val_roc_auc"],
             linestyle="--", color="crimson", label="Validation (biased)")
-    ax.plot(best["gene"], best["unbiased_lasso_train_roc_auc"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_train_roc_auc"],
             linestyle=":", color="steelblue", label="Train (unbiased)")
-    ax.plot(best["gene"], best["unbiased_lasso_val_roc_auc"],
+    ax.plot(best["n_genes"], best["unbiased_lasso_val_roc_auc"],
             linestyle="--", color="steelblue", label="Validation (unbiased)")
     ax.set_xlabel("Number of selected genes")
     ax.set_xscale("log", base=2)
-    # ax.set_yscale("log")
+    # ax.set_yscale("logit")
     ax.set_title("Lasso")
     ax.legend()
     ax.grid()
 
     fig.suptitle("Selection bias: biased vs unbiased")
     fig.tight_layout()
-    fig.savefig(output_dir / "bias_comparison_roc_auc.pdf")
+    fig.savefig(metrics_dir / "roc_auc_bias_comparison.pdf")
     plt.close(fig)
 
-    logger.info("Saved: %s", output_dir)
+    logger.info("Saved: %s", metrics_dir)
 
 
 if __name__ == "__main__":

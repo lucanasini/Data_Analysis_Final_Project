@@ -4,15 +4,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    log_loss,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
 from sklearn.model_selection import RepeatedStratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -20,8 +13,76 @@ from sklearn.svm import SVC
 from ._constants import SEED
 from .feature_selection import lasso_selection, rfe_svm_selection, statistical_fdr_selection
 from .plotting import plot_inclusion_probabilities
+from .utils import calculate_metrics
 
 logger = logging.getLogger(f"{'cross-validation':<16}")
+
+
+def _run_one_fold_biased(X, y, train_idx, val_idx, kernel):
+    X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+    X_val,   y_val   = X.iloc[val_idx],   y.iloc[val_idx]
+
+    scaler = StandardScaler()
+    X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train),
+                                  columns=X_train.columns,
+                                  index=X_train.index)
+    X_val_scaled   = pd.DataFrame(scaler.transform(X_val),
+                                  columns=X_val.columns,
+                                  index=X_val.index)
+
+    model = CalibratedClassifierCV(SVC(kernel=kernel, random_state=SEED), ensemble=False)
+    model.fit(X_train_scaled, y_train)
+
+    train_preds, train_probs = model.predict(X_train_scaled), model.predict_proba(X_train_scaled)
+    val_preds,   val_probs   = model.predict(X_val_scaled),   model.predict_proba(X_val_scaled)
+
+    return {
+        "train": calculate_metrics(y_train, train_preds, train_probs, model),
+        "val": calculate_metrics(y_val, val_preds, val_probs, model),
+    }
+
+def _run_one_fold_unbiased(X, y, train_idx, val_idx, kernel, alpha, n_features_to_select, C):
+    X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+    X_val,   y_val   = X.iloc[val_idx],   y.iloc[val_idx]
+
+    scaler = StandardScaler()
+    X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train),
+                                  columns=X_train.columns,
+                                  index=X_train.index)
+    X_val_scaled   = pd.DataFrame(scaler.transform(X_val),
+                                  columns=X_val.columns,
+                                  index=X_val.index)
+
+    fdr_mask, _ = statistical_fdr_selection(X_train_scaled, y_train, alpha=alpha)
+    rfe_mask    = rfe_svm_selection(X_train_scaled, y_train,
+                                    n_features_to_select=n_features_to_select)
+    lasso_mask  = lasso_selection(X_train_scaled, y_train, C=C)
+
+    X_train_sel_rfe,  = X_train_scaled.iloc[:, rfe_mask]
+    X_val_sel_rfe     = X_val_scaled.iloc[:, rfe_mask]
+    X_train_sel_lasso = X_train_scaled.iloc[:, lasso_mask]
+    X_val_sel_lasso   = X_val_scaled.iloc[:, lasso_mask]
+
+    model_rfe   = CalibratedClassifierCV(SVC(kernel=kernel, random_state=SEED), ensemble=False)
+    model_rfe.fit(X_train_sel_rfe, y_train)
+    model_lasso = CalibratedClassifierCV(SVC(kernel=kernel, random_state=SEED), ensemble=False)
+    model_lasso.fit(X_train_sel_lasso, y_train)
+
+    return {
+        "fdr_mask": fdr_mask, "rfe_mask": rfe_mask, "lasso_mask": lasso_mask,
+        "rfe":   {
+            "train": calculate_metrics(y_train, model_rfe.predict(X_train_sel_rfe),
+                                       model_rfe.predict_proba(X_train_sel_rfe), model_rfe),
+            "val":   calculate_metrics(y_val,   model_rfe.predict(X_val_sel_rfe),
+                                       model_rfe.predict_proba(X_val_sel_rfe),   model_rfe),
+        },
+        "lasso": {
+            "train": calculate_metrics(y_train, model_lasso.predict(X_train_sel_lasso),
+                                       model_lasso.predict_proba(X_train_sel_lasso), model_lasso),
+            "val":   calculate_metrics(y_val,   model_lasso.predict(X_val_sel_lasso),
+                                       model_lasso.predict_proba(X_val_sel_lasso),   model_lasso),
+        },
+    }
 
 
 def CrossValidationBiased(
@@ -31,6 +92,7 @@ def CrossValidationBiased(
     n_repeats: int,
     parameters: list,
     kernel: str = "linear",
+    n_jobs: int = -1,
 ):
     """
     Run cross-validation with external feature selection (RFE + Lasso) and training of a linear SVM.
@@ -68,136 +130,59 @@ def CrossValidationBiased(
     train_metrics = {
         "accuracy":  deepcopy(base), "loss":    deepcopy(base),
         "precision": deepcopy(base), "recall":  deepcopy(base),
-        "f1-score":  deepcopy(base), "roc-auc": deepcopy(base)
+        "f1_score":  deepcopy(base), "roc_auc": deepcopy(base)
     }
     val_metrics   = {
         "accuracy":  deepcopy(base), "loss":    deepcopy(base),
         "precision": deepcopy(base), "recall":  deepcopy(base),
-        "f1-score":  deepcopy(base), "roc-auc": deepcopy(base)
+        "f1_score":  deepcopy(base), "roc_auc": deepcopy(base)
     }
-    for _, (train_idx, val_idx) in enumerate(rskf.split(X_selected_rfe, y)):
-        X_train, y_train = X_selected_rfe.iloc[train_idx], y.iloc[train_idx]
-        X_val,   y_val   = X_selected_rfe.iloc[val_idx],   y.iloc[val_idx]
 
-        scaler = StandardScaler()
-        X_train_scaled = pd.DataFrame(
-            scaler.fit_transform(X_train),
-            columns=X_train.columns,
-            index=X_train.index
-        )
-        X_val_scaled   = pd.DataFrame(
-            scaler.transform(X_val),
-            columns=X_val.columns,
-            index=X_val.index
-        )
+    fold_results_rfe = Parallel(n_jobs=n_jobs)(
+        delayed(_run_one_fold_biased)(X_selected_rfe, y, train_idx, val_idx, kernel)
+        for train_idx, val_idx in rskf.split(X_selected_rfe, y)
+    )
 
-        base_svc_rfe = SVC(kernel=kernel, random_state=SEED)
-        model_rfe    = CalibratedClassifierCV(base_svc_rfe, ensemble=False)
-        model_rfe.fit(X_train_scaled, y_train)
-
-        train_preds_rfe = model_rfe.predict(X_train_scaled)
-        train_probs_rfe = model_rfe.predict_proba(X_train_scaled)
-        val_preds_rfe   = model_rfe.predict(X_val_scaled)
-        val_probs_rfe   = model_rfe.predict_proba(X_val_scaled)
-
-        train_metrics["accuracy"]["rfe"]  += [accuracy_score(y_train, train_preds_rfe)]
-        train_metrics["loss"]["rfe"]      += [log_loss(y_train, train_probs_rfe,
-                                                       labels=model_rfe.classes_)]
-        train_metrics["precision"]["rfe"] += [precision_score(y_train, train_preds_rfe,
-                                                              pos_label=model_rfe.classes_[1])]
-        train_metrics["recall"]["rfe"]    += [recall_score(y_train, train_preds_rfe,
-                                                           pos_label=model_rfe.classes_[1])]
-        train_metrics["f1-score"]["rfe"]  += [f1_score(y_train, train_preds_rfe,
-                                                       pos_label=model_rfe.classes_[1])]
-        train_metrics["roc-auc"]["rfe"]   += [roc_auc_score(y_train, train_probs_rfe[:, 1],
-                                                            labels=model_rfe.classes_)]
+    for res in fold_results_rfe:
+        for metric in train_metrics:
+            train_metrics[metric]["rfe"].append(res["train"][metric])
+            val_metrics[metric]["rfe"].append(res["val"][metric])
         
-        val_metrics["accuracy"]["rfe"]    += [accuracy_score(y_val, val_preds_rfe)]
-        val_metrics["loss"]["rfe"]        += [log_loss(y_val, val_probs_rfe,
-                                                       labels=model_rfe.classes_)]
-        val_metrics["precision"]["rfe"]   += [precision_score(y_val, val_preds_rfe,
-                                                              pos_label=model_rfe.classes_[1])]
-        val_metrics["recall"]["rfe"]      += [recall_score(y_val, val_preds_rfe,
-                                                           pos_label=model_rfe.classes_[1])]
-        val_metrics["f1-score"]["rfe"]    += [f1_score(y_val, val_preds_rfe,
-                                                       pos_label=model_rfe.classes_[1])]
-        val_metrics["roc-auc"]["rfe"]     += [roc_auc_score(y_val, val_probs_rfe[:, 1],
-                                                            labels=model_rfe.classes_)]
-        
-    for _, (train_idx, val_idx) in enumerate(rskf.split(X_selected_lasso, y)):
-        X_train, y_train = X_selected_lasso.iloc[train_idx], y.iloc[train_idx]
-        X_val,   y_val   = X_selected_lasso.iloc[val_idx],   y.iloc[val_idx]
+    fold_results_lasso = Parallel(n_jobs=n_jobs)(
+        delayed(_run_one_fold_biased)(X_selected_lasso, y, train_idx, val_idx, kernel)
+        for train_idx, val_idx in rskf.split(X_selected_lasso, y)
+    )
 
-        scaler = StandardScaler()
-        X_train_scaled = pd.DataFrame(
-            scaler.fit_transform(X_train),
-            columns=X_train.columns,
-            index=X_train.index
-        )
-        X_val_scaled   = pd.DataFrame(
-            scaler.transform(X_val),
-            columns=X_val.columns,
-            index=X_val.index
-        )
-        
-        base_svc_lasso = SVC(kernel=kernel, random_state=SEED)
-        model_lasso    = CalibratedClassifierCV(base_svc_lasso, ensemble=False)
-        model_lasso.fit(X_train_scaled, y_train)
-        
-        train_preds_lasso = model_lasso.predict(X_train_scaled)
-        train_probs_lasso = model_lasso.predict_proba(X_train_scaled)
-        val_preds_lasso   = model_lasso.predict(X_val_scaled)
-        val_probs_lasso   = model_lasso.predict_proba(X_val_scaled)
-
-        train_metrics["accuracy"]["lasso"]  += [accuracy_score(y_train, train_preds_lasso)]
-        train_metrics["loss"]["lasso"]      += [log_loss(y_train, train_probs_lasso,
-                                                         labels=model_lasso.classes_)]
-        train_metrics["precision"]["lasso"] += [precision_score(y_train, train_preds_lasso,
-                                                                pos_label=model_lasso.classes_[1])]
-        train_metrics["recall"]["lasso"]    += [recall_score(y_train, train_preds_lasso,
-                                                             pos_label=model_lasso.classes_[1])]
-        train_metrics["f1-score"]["lasso"]  += [f1_score(y_train, train_preds_lasso,
-                                                         pos_label=model_lasso.classes_[1])]
-        train_metrics["roc-auc"]["lasso"]   += [roc_auc_score(y_train, train_probs_lasso[:, 1],
-                                                              labels=model_lasso.classes_)]
-        
-        val_metrics["accuracy"]["lasso"]    += [accuracy_score(y_val, val_preds_lasso)]
-        val_metrics["loss"]["lasso"]        += [log_loss(y_val, val_probs_lasso,
-                                                         labels=model_lasso.classes_)]
-        val_metrics["precision"]["lasso"]   += [precision_score(y_val, val_preds_lasso,
-                                                                pos_label=model_lasso.classes_[1])]
-        val_metrics["recall"]["lasso"]      += [recall_score(y_val, val_preds_lasso,
-                                                             pos_label=model_lasso.classes_[1])]
-        val_metrics["f1-score"]["lasso"]    += [f1_score(y_val, val_preds_lasso,
-                                                         pos_label=model_lasso.classes_[1])]
-        val_metrics["roc-auc"]["lasso"]     += [roc_auc_score(y_val, val_probs_lasso[:, 1],
-                                                              labels=model_lasso.classes_)]
+    for res in fold_results_lasso:
+        for metric in train_metrics:
+            train_metrics[metric]["lasso"].append(res["train"][metric])
+            val_metrics[metric]["lasso"].append(res["val"][metric])
 
     train_rfe_mean_accuracy    = float(np.mean(train_metrics["accuracy"]["rfe"]))
     train_rfe_mean_loss        = float(np.mean(train_metrics["loss"]["rfe"]))
     train_rfe_mean_precision   = float(np.mean(train_metrics["precision"]["rfe"]))
     train_rfe_mean_recall      = float(np.mean(train_metrics["recall"]["rfe"]))
-    train_rfe_mean_f1_score    = float(np.mean(train_metrics["f1-score"]["rfe"]))
-    train_rfe_mean_roc_auc     = float(np.mean(train_metrics["roc-auc"]["rfe"]))
+    train_rfe_mean_f1_score    = float(np.mean(train_metrics["f1_score"]["rfe"]))
+    train_rfe_mean_roc_auc     = float(np.mean(train_metrics["roc_auc"]["rfe"]))
     train_lasso_mean_accuracy  = float(np.mean(train_metrics["accuracy"]["lasso"]))
     train_lasso_mean_loss      = float(np.mean(train_metrics["loss"]["lasso"]))
     train_lasso_mean_precision = float(np.mean(train_metrics["precision"]["lasso"]))
     train_lasso_mean_recall    = float(np.mean(train_metrics["recall"]["lasso"]))
-    train_lasso_mean_f1_score  = float(np.mean(train_metrics["f1-score"]["lasso"]))
-    train_lasso_mean_roc_auc   = float(np.mean(train_metrics["roc-auc"]["lasso"]))
+    train_lasso_mean_f1_score  = float(np.mean(train_metrics["f1_score"]["lasso"]))
+    train_lasso_mean_roc_auc   = float(np.mean(train_metrics["roc_auc"]["lasso"]))
 
     val_rfe_mean_accuracy    = float(np.mean(val_metrics["accuracy"]["rfe"]))
     val_rfe_mean_loss        = float(np.mean(val_metrics["loss"]["rfe"]))
     val_rfe_mean_precision   = float(np.mean(val_metrics["precision"]["rfe"]))
     val_rfe_mean_recall      = float(np.mean(val_metrics["recall"]["rfe"]))
-    val_rfe_mean_f1_score    = float(np.mean(val_metrics["f1-score"]["rfe"]))
-    val_rfe_mean_roc_auc     = float(np.mean(val_metrics["roc-auc"]["rfe"]))
+    val_rfe_mean_f1_score    = float(np.mean(val_metrics["f1_score"]["rfe"]))
+    val_rfe_mean_roc_auc     = float(np.mean(val_metrics["roc_auc"]["rfe"]))
     val_lasso_mean_accuracy  = float(np.mean(val_metrics["accuracy"]["lasso"]))
     val_lasso_mean_loss      = float(np.mean(val_metrics["loss"]["lasso"]))
     val_lasso_mean_precision = float(np.mean(val_metrics["precision"]["lasso"]))
     val_lasso_mean_recall    = float(np.mean(val_metrics["recall"]["lasso"]))
-    val_lasso_mean_f1_score  = float(np.mean(val_metrics["f1-score"]["lasso"]))
-    val_lasso_mean_roc_auc   = float(np.mean(val_metrics["roc-auc"]["lasso"]))
+    val_lasso_mean_f1_score  = float(np.mean(val_metrics["f1_score"]["lasso"]))
+    val_lasso_mean_roc_auc   = float(np.mean(val_metrics["roc_auc"]["lasso"]))
     logger.info(
         "Biased CV completed. Mean Validation Metrics: RFE Accuracy = %.4f, RFE Loss = %.4f, "
         "Lasso Accuracy = %.4f, Lasso Loss = %.4f",
@@ -225,6 +210,7 @@ def CrossValidationUnbiased(
     parameters: list,
     kernel: str = "linear",
     plot_dir: str | Path = None,
+    n_jobs: int = -1,
 ):
     """
     Run cross-validation with internal feature selection (RFE + RFE + Lasso)
@@ -260,112 +246,29 @@ def CrossValidationUnbiased(
     train_metrics = {
         "accuracy":  deepcopy(base), "loss":    deepcopy(base),
         "precision": deepcopy(base), "recall":  deepcopy(base),
-        "f1-score":  deepcopy(base), "roc-auc": deepcopy(base)
+        "f1_score":  deepcopy(base), "roc_auc": deepcopy(base)
     }
     val_metrics   = {
         "accuracy":  deepcopy(base), "loss":    deepcopy(base),
         "precision": deepcopy(base), "recall":  deepcopy(base),
-        "f1-score":  deepcopy(base), "roc-auc": deepcopy(base)
+        "f1_score":  deepcopy(base), "roc_auc": deepcopy(base)
     }
-    for _, (train_idx, val_idx) in enumerate(rskf.split(X, y)):
-        X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
-        X_val,   y_val   = X.iloc[val_idx],   y.iloc[val_idx]
 
-        # 1. standardization
-        scaler = StandardScaler()
-        X_train_scaled = pd.DataFrame(
-            scaler.fit_transform(X_train),
-            columns=X_train.columns,
-            index=X_train.index
-        )
-        X_val_scaled   = pd.DataFrame(
-            scaler.transform(X_val),
-            columns=X_val.columns,
-            index=X_val.index
-        )
+    fold_results = Parallel(n_jobs=n_jobs)(
+        delayed(_run_one_fold_unbiased)(X, y, train_idx, val_idx, kernel, fdr_alpha,
+                                        n_features_to_select, lasso_C)
+        for train_idx, val_idx in rskf.split(X, y)
+    )
 
-        # 2. internal feature selection
-        # 1st approach: FDR
-        fdr_mask, _ = statistical_fdr_selection(X_train_scaled, y_train, alpha=fdr_alpha)
-        fdr_selection_counts += fdr_mask
-        # 2nd approach: SVM-RFE
-        rfe_mask = rfe_svm_selection(X_train_scaled, y_train,
-                                     n_features_to_select=n_features_to_select)
-        rfe_selection_counts += rfe_mask
-        # 3rd approach: Lasso
-        lasso_mask = lasso_selection(X_train_scaled, y_train, C=lasso_C)
-        lasso_selection_counts += lasso_mask
-
-        # 3. training
-        # on RFE gene
-        X_train_sel_rfe = X_train_scaled.iloc[:, rfe_mask]
-        X_val_sel_rfe   = X_val_scaled.iloc[:, rfe_mask]
-        base_svc_rfe = SVC(kernel=kernel, random_state=SEED)
-        model_rfe = CalibratedClassifierCV(base_svc_rfe, ensemble=False)
-        model_rfe.fit(X_train_sel_rfe, y_train)
-        # on Lasso gene
-        X_train_sel_lasso = X_train_scaled.iloc[:, lasso_mask]
-        X_val_sel_lasso   = X_val_scaled.iloc[:, lasso_mask]
-        base_svc_lasso = SVC(kernel=kernel, random_state=SEED)
-        model_lasso = CalibratedClassifierCV(base_svc_lasso, ensemble=False)
-        model_lasso.fit(X_train_sel_lasso, y_train)
-
-        # 4. validation
-        train_preds_rfe   = model_rfe.predict(X_train_sel_rfe)
-        train_probs_rfe   = model_rfe.predict_proba(X_train_sel_rfe)
-        train_preds_lasso = model_lasso.predict(X_train_sel_lasso)
-        train_probs_lasso = model_lasso.predict_proba(X_train_sel_lasso)
-        val_preds_rfe     = model_rfe.predict(X_val_sel_rfe)
-        val_probs_rfe     = model_rfe.predict_proba(X_val_sel_rfe)
-        val_preds_lasso   = model_lasso.predict(X_val_sel_lasso)
-        val_probs_lasso   = model_lasso.predict_proba(X_val_sel_lasso)
-        
-        train_metrics["accuracy"]["rfe"]    += [accuracy_score(y_train, train_preds_rfe)]
-        train_metrics["loss"]["rfe"]        += [log_loss(y_train, train_probs_rfe,
-                                                         labels=model_rfe.classes_)]
-        train_metrics["precision"]["rfe"]   += [precision_score(y_train, train_preds_rfe,
-                                                                pos_label=model_rfe.classes_[1])]
-        train_metrics["recall"]["rfe"]      += [recall_score(y_train, train_preds_rfe,
-                                                             pos_label=model_rfe.classes_[1])]
-        train_metrics["f1-score"]["rfe"]    += [f1_score(y_train, train_preds_rfe,
-                                                         pos_label=model_rfe.classes_[1])]
-        train_metrics["roc-auc"]["rfe"]     += [roc_auc_score(y_train, train_probs_rfe[:, 1],
-                                                              labels=model_rfe.classes_)]
-        train_metrics["accuracy"]["lasso"]  += [accuracy_score(y_train, train_preds_lasso)]
-        train_metrics["loss"]["lasso"]      += [log_loss(y_train, train_probs_lasso,
-                                                         labels=model_lasso.classes_)]
-        train_metrics["precision"]["lasso"] += [precision_score(y_train, train_preds_lasso,
-                                                                pos_label=model_lasso.classes_[1])]
-        train_metrics["recall"]["lasso"]    += [recall_score(y_train, train_preds_lasso,
-                                                             pos_label=model_lasso.classes_[1])]
-        train_metrics["f1-score"]["lasso"]  += [f1_score(y_train, train_preds_lasso,
-                                                         pos_label=model_lasso.classes_[1])]
-        train_metrics["roc-auc"]["lasso"]   += [roc_auc_score(y_train, train_probs_lasso[:, 1],
-                                                              labels=model_lasso.classes_)]
-
-        val_metrics["accuracy"]["rfe"]      += [accuracy_score(y_val, val_preds_rfe)]
-        val_metrics["loss"]["rfe"]          += [log_loss(y_val, val_probs_rfe,
-                                                         labels=model_rfe.classes_)]
-        val_metrics["precision"]["rfe"]     += [precision_score(y_val, val_preds_rfe,
-                                                                pos_label=model_rfe.classes_[1])]
-        val_metrics["recall"]["rfe"]        += [recall_score(y_val, val_preds_rfe,
-                                                             pos_label=model_rfe.classes_[1])]
-        val_metrics["f1-score"]["rfe"]      += [f1_score(y_val, val_preds_rfe,
-                                                         pos_label=model_rfe.classes_[1])]
-        val_metrics["roc-auc"]["rfe"]       += [roc_auc_score(y_val, val_probs_rfe[:, 1],
-                                                              labels=model_rfe.classes_)]
-
-        val_metrics["accuracy"]["lasso"]    += [accuracy_score(y_val, val_preds_lasso)]
-        val_metrics["loss"]["lasso"]        += [log_loss(y_val, val_probs_lasso,
-                                                         labels=model_lasso.classes_)]
-        val_metrics["precision"]["lasso"]   += [precision_score(y_val, val_preds_lasso,
-                                                                pos_label=model_lasso.classes_[1])]
-        val_metrics["recall"]["lasso"]      += [recall_score(y_val, val_preds_lasso,
-                                                             pos_label=model_lasso.classes_[1])]
-        val_metrics["f1-score"]["lasso"]    += [f1_score(y_val, val_preds_lasso,
-                                                         pos_label=model_lasso.classes_[1])]
-        val_metrics["roc-auc"]["lasso"]     += [roc_auc_score(y_val, val_probs_lasso[:, 1],
-                                                              labels=model_lasso.classes_)]
+    for res in fold_results:
+        fdr_selection_counts   += res["fdr_mask"]
+        rfe_selection_counts   += res["rfe_mask"]
+        lasso_selection_counts += res["lasso_mask"]
+        for metric in train_metrics:
+            train_metrics[metric]["rfe"].append(res["rfe"]["train"][metric])
+            val_metrics[metric]["rfe"].append(res["rfe"]["val"][metric])
+            train_metrics[metric]["lasso"].append(res["lasso"]["train"][metric])
+            val_metrics[metric]["lasso"].append(res["lasso"]["val"][metric])
 
     # calculate inclusion probabilities
     total_runs = n_splits * n_repeats
@@ -406,27 +309,27 @@ def CrossValidationUnbiased(
     train_rfe_mean_loss        = float(np.mean(train_metrics["loss"]["rfe"]))
     train_rfe_mean_precision   = float(np.mean(train_metrics["precision"]["rfe"]))
     train_rfe_mean_recall      = float(np.mean(train_metrics["recall"]["rfe"]))
-    train_rfe_mean_f1_score    = float(np.mean(train_metrics["f1-score"]["rfe"]))
-    train_rfe_mean_roc_auc     = float(np.mean(train_metrics["roc-auc"]["rfe"]))
+    train_rfe_mean_f1_score    = float(np.mean(train_metrics["f1_score"]["rfe"]))
+    train_rfe_mean_roc_auc     = float(np.mean(train_metrics["roc_auc"]["rfe"]))
     train_lasso_mean_accuracy  = float(np.mean(train_metrics["accuracy"]["lasso"]))
     train_lasso_mean_loss      = float(np.mean(train_metrics["loss"]["lasso"]))
     train_lasso_mean_precision = float(np.mean(train_metrics["precision"]["lasso"]))
     train_lasso_mean_recall    = float(np.mean(train_metrics["recall"]["lasso"]))
-    train_lasso_mean_f1_score  = float(np.mean(train_metrics["f1-score"]["lasso"]))
-    train_lasso_mean_roc_auc   = float(np.mean(train_metrics["roc-auc"]["lasso"]))
+    train_lasso_mean_f1_score  = float(np.mean(train_metrics["f1_score"]["lasso"]))
+    train_lasso_mean_roc_auc   = float(np.mean(train_metrics["roc_auc"]["lasso"]))
 
     val_rfe_mean_accuracy    = float(np.mean(val_metrics["accuracy"]["rfe"]))
     val_rfe_mean_loss        = float(np.mean(val_metrics["loss"]["rfe"]))
     val_rfe_mean_precision   = float(np.mean(val_metrics["precision"]["rfe"]))
     val_rfe_mean_recall      = float(np.mean(val_metrics["recall"]["rfe"]))
-    val_rfe_mean_f1_score    = float(np.mean(val_metrics["f1-score"]["rfe"]))
-    val_rfe_mean_roc_auc     = float(np.mean(val_metrics["roc-auc"]["rfe"]))
+    val_rfe_mean_f1_score    = float(np.mean(val_metrics["f1_score"]["rfe"]))
+    val_rfe_mean_roc_auc     = float(np.mean(val_metrics["roc_auc"]["rfe"]))
     val_lasso_mean_accuracy  = float(np.mean(val_metrics["accuracy"]["lasso"]))
     val_lasso_mean_loss      = float(np.mean(val_metrics["loss"]["lasso"]))
     val_lasso_mean_precision = float(np.mean(val_metrics["precision"]["lasso"]))
     val_lasso_mean_recall    = float(np.mean(val_metrics["recall"]["lasso"]))
-    val_lasso_mean_f1_score  = float(np.mean(val_metrics["f1-score"]["lasso"]))
-    val_lasso_mean_roc_auc   = float(np.mean(val_metrics["roc-auc"]["lasso"]))
+    val_lasso_mean_f1_score  = float(np.mean(val_metrics["f1_score"]["lasso"]))
+    val_lasso_mean_roc_auc   = float(np.mean(val_metrics["roc_auc"]["lasso"]))
     logger.info(
         "Unbiased CV completed. Mean Validation Metrics: RFE Accuracy = %.4f, RFE Loss = %.4f, "
         "Lasso Accuracy = %.4f, Lasso Loss = %.4f\n",

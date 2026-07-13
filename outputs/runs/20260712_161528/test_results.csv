@@ -1,0 +1,2 @@
+rfe,lasso
+"{'accuracy': 1.0, 'loss': 0.09016828395041276, 'precision': 1.0, 'recall': 1.0, 'f1_score': 1.0, 'roc_auc': 1.0}","{'accuracy': 1.0, 'loss': 0.08751462130419127, 'precision': 1.0, 'recall': 1.0, 'f1_score': 1.0, 'roc_auc': 1.0}"
