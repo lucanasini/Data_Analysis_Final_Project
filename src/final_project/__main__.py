@@ -9,7 +9,12 @@ import pandas as pd
 from . import __version__
 from .bias_experiment import run_bias_experiment
 from .evaluate import evaluate
-from .plotting import plot_correlations, plot_norm_stats
+from .plotting import (
+    plot_bias_comparison,
+    plot_correlations,
+    plot_inclusion_probabilities,
+    plot_norm_stats,
+)
 from .preprocess import compute_normalization_stats, run_preprocess
 from .utils import load_config_json
 
@@ -17,7 +22,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger(f"{'MAIN':<16}")
+logger = logging.getLogger(f"{'MAIN':<17}")
 
 
 def main():
@@ -38,7 +43,8 @@ def main():
     )
     parser.add_argument(
         "--evaluate",
-        action="store_true",
+        type=str,
+        default=None,
         help="Run evaluation on the test set instead of training.",
     )
     args = parser.parse_args()
@@ -97,17 +103,14 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
     # selection bias experiment (Ambroise & McLachlan, 2002)
     if not args.evaluate:
-        logger.info("=== Selection bias experiment ===")
         results, inclusion_probs = run_bias_experiment(
             X_cv, y_cv,
             n_splits   = n_splits,
             n_repeats  = n_repeats,
             parameters = [genes, alpha, C],
-            plot_dir   = plot_dir,
         )
 
-        best_run_index = np.argmin(np.minimum(results["biased_rfe_val_loss"],
-                                            results["unbiased_rfe_val_loss"]))
+        best_run_index = np.argmax(results["unbiased_rfe_val_f1_score"])
         best_inclusion_prob = inclusion_probs[best_run_index]
         logger.info("Best index: %d | Best parameters: [%s %s %s]",
                     best_run_index, results["n_genes"].iloc[best_run_index],
@@ -117,18 +120,23 @@ def main():
 
         feature_names = X_cv.columns.tolist()
         try:
-                rfe_probs = best_inclusion_prob[0]
-        except Exception:
+            rfe_probs = best_inclusion_prob[0]
+        except (IndexError, TypeError):
             rfe_probs = [np.nan] * len(feature_names)
         try:
-                lasso_probs = best_inclusion_prob[2]
-        except Exception:
+            lasso_probs = best_inclusion_prob[2]
+        except (IndexError, TypeError):
             lasso_probs = [np.nan] * len(feature_names)
+        try:
+            fdr_probs = best_inclusion_prob[1]
+        except (IndexError, TypeError):
+            fdr_probs = [np.nan] * len(feature_names)
 
         df_selected = pd.DataFrame({
             "feature": feature_names,
-            "rfe_inclusion_prob": list(rfe_probs),
+            "rfe_inclusion_prob":   list(rfe_probs),
             "lasso_inclusion_prob": list(lasso_probs),
+            "fdr_inclusion_prob":   list(fdr_probs)
         })
         
         df_selected = df_selected[
@@ -137,28 +145,36 @@ def main():
         ]
 
         df_selected.to_csv(run_dir / "selected_features.csv", index=False)
+        best_inclusion_prob = df_selected
     
     else:
-        run_subdirs = list(run_dir.parent.glob("*/bias_experiment_results.csv"))
-        if not run_subdirs:
-            logger.error("No previous bias experiment results found in %s", run_dir.parent)
-            raise FileNotFoundError(f"No bias_experiment_results.csv found in {run_dir.parent}")
-        latest_csv = max(run_subdirs, key=lambda p: p.parent.stat().st_mtime)
+        latest_csv = Path(args.evaluate) / "bias_experiment_results.csv"
         results = pd.read_csv(latest_csv)
-        best_run_index = np.argmin(np.minimum(results["biased_rfe_val_loss"],
-                                              results["unbiased_rfe_val_loss"]))
+        best_run_index = np.argmax(results["unbiased_rfe_val_f1_score"])
         best_inclusion_prob = pd.read_csv(latest_csv.parent / "selected_features.csv")
+
+    if plot_dir is not None:
+        plot_bias_comparison(
+            results=results,
+            chance_level=1. / y_cv.nunique(),
+            output_dir=plot_dir,
+        )
+        plot_inclusion_probabilities(
+            rfe_inclusion_prob   = best_inclusion_prob["rfe_inclusion_prob"].values,
+            fdr_inclusion_prob   = best_inclusion_prob["fdr_inclusion_prob"].values,
+            lasso_inclusion_prob = best_inclusion_prob["lasso_inclusion_prob"].values,
+            output_dir = plot_dir,
+        )
 
     # evaluation
     test_results = evaluate(
         X_cv,   y_cv,
         X_test, y_test,
-        n_features_to_select = results["n_genes"].iloc[best_run_index],
-        rfe_inclusion_prob   = (best_inclusion_prob["rfe_inclusion_prob"].values
-                                if args.evaluate else best_inclusion_prob[0]),
-        lasso_inclusion_prob = (best_inclusion_prob["lasso_inclusion_prob"].values
-                                if args.evaluate else best_inclusion_prob[2]),
+        n_genes              = results["n_genes"].iloc[best_run_index],
+        rfe_inclusion_prob   = best_inclusion_prob["rfe_inclusion_prob"].values,
+        lasso_inclusion_prob = best_inclusion_prob["lasso_inclusion_prob"].values,
         plot_dir = plot_dir,
+        run_dir  = run_dir,
     )
     
     test_results.to_csv(run_dir / "test_results.csv", index=False)

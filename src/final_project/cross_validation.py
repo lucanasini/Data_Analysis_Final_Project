@@ -1,6 +1,5 @@
 import logging
 from copy import deepcopy
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,10 +11,9 @@ from sklearn.svm import SVC
 
 from ._constants import SEED
 from .feature_selection import lasso_selection, rfe_svm_selection, statistical_fdr_selection
-from .plotting import plot_inclusion_probabilities
 from .utils import calculate_metrics
 
-logger = logging.getLogger(f"{'cross-validation':<16}")
+logger = logging.getLogger(f"{'cross-validation':<17}")
 
 
 def _run_one_fold_biased(X, y, train_idx, val_idx, kernel):
@@ -41,7 +39,7 @@ def _run_one_fold_biased(X, y, train_idx, val_idx, kernel):
         "val": calculate_metrics(y_val, val_preds, val_probs, model),
     }
 
-def _run_one_fold_unbiased(X, y, train_idx, val_idx, kernel, alpha, n_features_to_select, C):
+def _run_one_fold_unbiased(X, y, train_idx, val_idx, kernel, alpha, n_genes, C):
     X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
     X_val,   y_val   = X.iloc[val_idx],   y.iloc[val_idx]
 
@@ -54,11 +52,10 @@ def _run_one_fold_unbiased(X, y, train_idx, val_idx, kernel, alpha, n_features_t
                                   index=X_val.index)
 
     fdr_mask, _ = statistical_fdr_selection(X_train_scaled, y_train, alpha=alpha)
-    rfe_mask    = rfe_svm_selection(X_train_scaled, y_train,
-                                    n_features_to_select=n_features_to_select)
+    rfe_mask    = rfe_svm_selection(X_train_scaled, y_train, n_genes=n_genes)
     lasso_mask  = lasso_selection(X_train_scaled, y_train, C=C)
 
-    X_train_sel_rfe,  = X_train_scaled.iloc[:, rfe_mask]
+    X_train_sel_rfe   = X_train_scaled.iloc[:, rfe_mask]
     X_val_sel_rfe     = X_val_scaled.iloc[:, rfe_mask]
     X_train_sel_lasso = X_train_scaled.iloc[:, lasso_mask]
     X_val_sel_lasso   = X_val_scaled.iloc[:, lasso_mask]
@@ -67,6 +64,11 @@ def _run_one_fold_unbiased(X, y, train_idx, val_idx, kernel, alpha, n_features_t
     model_rfe.fit(X_train_sel_rfe, y_train)
     model_lasso = CalibratedClassifierCV(SVC(kernel=kernel, random_state=SEED), ensemble=False)
     model_lasso.fit(X_train_sel_lasso, y_train)
+
+    logger.debug(
+        "Fold feature counts - RFE: %d | FDR: %d | Lasso: %d",
+        rfe_mask.sum(), fdr_mask.sum(), lasso_mask.sum()
+    )
 
     return {
         "fdr_mask": fdr_mask, "rfe_mask": rfe_mask, "lasso_mask": lasso_mask,
@@ -85,7 +87,7 @@ def _run_one_fold_unbiased(X, y, train_idx, val_idx, kernel, alpha, n_features_t
     }
 
 
-def CrossValidationBiased(
+def cross_validation_biased(
     X: pd.DataFrame,
     y: pd.DataFrame,
     n_splits: int,
@@ -110,11 +112,11 @@ def CrossValidationBiased(
         train_metrics (list): List containing mean training accuracy and loss for RFE and Lasso.
         val_metrics (list): List containing mean validation accuracy and loss for RFE and Lasso.
     """
-    n_features_to_select, _, lasso_C = parameters
+    n_genes, _, lasso_C = parameters
 
     # 1. feature selection
     # SVM-RFE
-    rfe_mask         = rfe_svm_selection(X, y, n_features_to_select=n_features_to_select)
+    rfe_mask         = rfe_svm_selection(X, y, n_genes=n_genes)
     X_selected_rfe   = X.iloc[:, rfe_mask]
     # Lasso
     lasso_mask       = lasso_selection(X, y, C=lasso_C)
@@ -123,10 +125,7 @@ def CrossValidationBiased(
     # 2. CV
     rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=SEED)
 
-    base = {
-        "rfe":   [],
-        "lasso": []
-    }
+    base = {"rfe": [], "lasso": []}
     train_metrics = {
         "accuracy":  deepcopy(base), "loss":    deepcopy(base),
         "precision": deepcopy(base), "recall":  deepcopy(base),
@@ -202,14 +201,13 @@ def CrossValidationBiased(
              val_lasso_mean_f1_score, val_lasso_mean_roc_auc])
 
 
-def CrossValidationUnbiased(
+def cross_validation_unbiased(
     X: pd.DataFrame,
     y: pd.DataFrame,
     n_splits: int,
     n_repeats: int,
     parameters: list,
     kernel: str = "linear",
-    plot_dir: str | Path = None,
     n_jobs: int = -1,
 ):
     """
@@ -224,7 +222,6 @@ def CrossValidationUnbiased(
         parameters (list): List of parameters for feature selection and modeling
             (``num_features``, ``alpha``, ``C``).
         kernel (str, optional): Kernel type for SVM. (Default: ``linear``)
-        plot_dir (str | Path, optional): Directory to save plots.
 
     Returns:
         inclusion_probs (np.ndarray): Array of inclusion probabilities for each gene.
@@ -233,16 +230,13 @@ def CrossValidationUnbiased(
     """
     rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=SEED)
 
-    n_features_to_select, fdr_alpha, lasso_C = parameters
+    n_genes, fdr_alpha, lasso_C = parameters
 
     rfe_selection_counts   = np.zeros(X.shape[1])
     fdr_selection_counts   = np.zeros(X.shape[1])
     lasso_selection_counts = np.zeros(X.shape[1])
 
-    base = {
-        "rfe":   [],
-        "lasso": []
-    }
+    base = {"rfe": [], "lasso": []}
     train_metrics = {
         "accuracy":  deepcopy(base), "loss":    deepcopy(base),
         "precision": deepcopy(base), "recall":  deepcopy(base),
@@ -255,8 +249,8 @@ def CrossValidationUnbiased(
     }
 
     fold_results = Parallel(n_jobs=n_jobs)(
-        delayed(_run_one_fold_unbiased)(X, y, train_idx, val_idx, kernel, fdr_alpha,
-                                        n_features_to_select, lasso_C)
+        delayed(_run_one_fold_unbiased)(X, y, train_idx, val_idx, kernel,
+                                        fdr_alpha, n_genes, lasso_C)
         for train_idx, val_idx in rskf.split(X, y)
     )
 
@@ -275,14 +269,6 @@ def CrossValidationUnbiased(
     rfe_inclusion_prob   = rfe_selection_counts   / total_runs
     fdr_inclusion_prob   = fdr_selection_counts   / total_runs
     lasso_inclusion_prob = lasso_selection_counts / total_runs
-
-    if plot_dir is not None:
-        plot_inclusion_probabilities(
-            rfe_inclusion_prob   = rfe_inclusion_prob,
-            fdr_inclusion_prob   = fdr_inclusion_prob,
-            lasso_inclusion_prob = lasso_inclusion_prob,
-            output_dir = plot_dir,
-        )
 
     # top 10 biomarkers for stability (SVM-RFE)
     top_rfe_idx = np.argsort(rfe_inclusion_prob)[::-1][:10]

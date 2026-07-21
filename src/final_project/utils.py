@@ -16,7 +16,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-logger = logging.getLogger(f"{'utils':<16}")
+logger = logging.getLogger(f"{'utils':<17}")
 
 
 def load_config_json(filepath: str | Path) -> dict:
@@ -62,9 +62,9 @@ def calculate_metrics(y_true, y_pred, y_prob, model):
     metrics = {
         "accuracy":  accuracy_score(y_true, y_pred),
         "loss":      log_loss(y_true, y_prob, labels=model.classes_),
-        "precision": precision_score(y_true, y_pred, pos_label=model.classes_[1]),
-        "recall":    recall_score(y_true, y_pred, pos_label=model.classes_[1]),
-        "f1_score":  f1_score(y_true, y_pred, pos_label=model.classes_[1]),
+        "precision": precision_score(y_true, y_pred, pos_label=model.classes_[1], zero_division=0),
+        "recall":    recall_score(y_true, y_pred, pos_label=model.classes_[1], zero_division=0),
+        "f1_score":  f1_score(y_true, y_pred, pos_label=model.classes_[1], zero_division=0),
         "roc_auc":   roc_auc_score(y_true, y_prob[:, 1], labels=model.classes_),
     }
     return metrics

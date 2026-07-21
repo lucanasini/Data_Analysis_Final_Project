@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
-logger = logging.getLogger(f"{'plotting':<16}")
+logger = logging.getLogger(f"{'plotting':<17}")
 
 
 def _draw_heatmap(ax, corr, labels, title, annotate=True):
@@ -227,17 +227,16 @@ def plot_inclusion_probabilities(
     logger.info("Saved: %s", out)
  
     # 2. sorted rank plot: shows the "cliff" between stable/unstable genes
-    order = np.argsort(rfe_inclusion_prob)[::-1]
-    sorted_rfe = rfe_inclusion_prob[order]
-    sorted_fdr = fdr_inclusion_prob[order]
-    sorted_lasso = lasso_inclusion_prob[order]
+    sorted_rfe   = np.sort(rfe_inclusion_prob)[::-1]
+    sorted_fdr   = np.sort(fdr_inclusion_prob)[::-1]
+    sorted_lasso = np.sort(lasso_inclusion_prob)[::-1]
     fig, ax = plt.subplots(figsize=(10, 5))
     x = np.arange(len(sorted_rfe))
-    ax.plot(x, sorted_rfe, label="SVM-RFE", color="steelblue", linewidth=1.5)
-    ax.plot(x, sorted_fdr, label="FDR (BH)", color="darkorange", linewidth=1.5, alpha=0.8)
-    ax.plot(x, sorted_lasso, label="Lasso", color="green", linewidth=1.5, alpha=0.8)
+    ax.plot(x, sorted_rfe,   label="SVM-RFE",  color="steelblue",  linewidth=1.5)
+    ax.plot(x, sorted_fdr,   label="FDR (BH)", color="darkorange", linewidth=1.5, alpha=0.8)
+    ax.plot(x, sorted_lasso, label="Lasso",    color="green",      linewidth=1.5, alpha=0.8)
     ax.axhline(0.5, color="gray", linestyle="--", linewidth=1, label="50% threshold")
-    ax.set_xlabel("Gene rank (sorted by RFE inclusion prob.)")
+    ax.set_xlabel("Gene rank (sorted by inclusion prob.)")
     ax.set_ylabel("Inclusion probability")
     ax.set_title("Ranked inclusion probabilities across all genes")
     ax.legend()

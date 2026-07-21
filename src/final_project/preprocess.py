@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 
 from ._constants import CLINICAL_COLS
 
-logger = logging.getLogger(f"{'preprocess':<16}")
+logger = logging.getLogger(f"{'preprocess':<17}")
 
 
 def compute_normalization_stats(
@@ -71,12 +71,13 @@ def run_preprocess(df: pd.DataFrame, config: dict) -> None:
     Warnings:
         ValueError: If the train + val / test fractions do not sum to 1.
     """
+    logger.info("=== Preprocess ===")
+
     df = df.drop(columns=["Samples"], errors="ignore")
     X = df.drop(columns=["cancer"] + CLINICAL_COLS)
     y = df["cancer"]
 
-    if config["data"].get("binarize_target", True):
-        y = y.replace({"allB": "ALL", "allT": "ALL"})
+    y = y.replace({"allB": "ALL", "allT": "ALL"})
 
     # 1. load configuration
     data_config = config["data"]

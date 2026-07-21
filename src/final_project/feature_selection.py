@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 from scipy.stats import f_oneway
@@ -8,6 +10,8 @@ from statsmodels.stats.multitest import multipletests
 
 from ._constants import SEED
 
+logger = logging.getLogger(f"{'feature selection':<17}")
+
 
 def statistical_fdr_selection(
     X: pd.DataFrame,
@@ -15,7 +19,8 @@ def statistical_fdr_selection(
     alpha: float = 0.05,
 ):
     """
-    Calculates the t-test for each gene and applies the Benjamini-Hochberg correction (FDR).
+    Performs a one-way ANOVA for each gene across all classes and applies
+    Benjamini-Hochberg FDR correction.
     Returns a boolean mask of significant genes and the q-values.
 
     Args:
@@ -42,7 +47,7 @@ def statistical_fdr_selection(
 def rfe_svm_selection(
     X_scaled: np.ndarray,
     y: pd.Series,
-    n_features_to_select: int = 30,
+    n_genes: int = 30,
     kernel: str = "linear"
 ):
     """
@@ -51,13 +56,13 @@ def rfe_svm_selection(
     Args:
         X_scaled (np.ndarray): Scaled feature matrix.
         y (pd.Series): Target vector.
-        n_features_to_select (int): Number of features to select (default: ``30``).
+        n_genes (int): Number of features to select (default: ``30``).
     
     Returns:
         selector.support_ (np.ndarray): Boolean mask of selected features.
     """
     estimator = SVC(kernel=kernel, random_state=SEED)
-    selector = RFE(estimator=estimator, n_features_to_select=n_features_to_select, step=0.1)
+    selector = RFE(estimator=estimator, n_features_to_select=n_genes, step=0.1)
     selector.fit(X_scaled, y)
     return selector.support_
 
@@ -86,12 +91,21 @@ def lasso_selection(
         np.ndarray: boolean mask of selected features.
     """
     model = LogisticRegression(
-        penalty="l1",
-        solver="saga",          # supports l1 + multinomial multiclass
+        solver="saga",
+        l1_ratio=1.0,          # 1.0 = L1, 0.0 = L2, (0.0, 1.0) = ElasticNet
         C=C,
         random_state=SEED,
         max_iter=10000,
     )
     model.fit(X, y)
-    coefs = model.coef_            # shape (n_classes, n_features) for multiclass
-    return np.any(coefs != 0, axis=0)
+    mask = np.any(model.coef_ != 0, axis=0)
+
+    if not mask.any():
+        logger.warning(
+            "Lasso (C=%.4f) selected 0 features - falling back to top-1 by |coef|.", C
+        )
+        best = np.argmax(np.abs(model.coef_).sum(axis=0))
+        mask = np.zeros(X.shape[1], dtype=bool)
+        mask[best] = True
+
+    return mask
